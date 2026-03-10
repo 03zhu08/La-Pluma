@@ -37,6 +37,11 @@ repositories {
     mavenCentral()
 }
 
+configurations {
+    shade
+    compile.extendsFrom shade
+}
+
 dependencies {
     compileOnly 'org.projectlombok:lombok:1.18.24'
     annotationProcessor 'org.projectlombok:lombok:1.18.24'
@@ -44,6 +49,17 @@ dependencies {
     testCompileOnly 'org.projectlombok:lombok:1.18.24'
     testAnnotationProcessor 'org.projectlombok:lombok:1.18.24'
 
+    shade 'org.bytedeco:javacv:1.5.9'
+    shade 'org.bytedeco:ffmpeg:6.0-1.5.9'
+    shade 'org.bytedeco:ffmpeg:6.0-1.5.9:windows-x86_64'
+    shade 'org.bytedeco:ffmpeg:6.0-1.5.9:linux-x86_64'
+    shade 'org.bytedeco:ffmpeg:6.0-1.5.9:macosx-x86_64'
+    shade 'org.bytedeco:ffmpeg:6.0-1.5.9:macosx-arm64'
+    shade 'org.bytedeco:javacpp:1.5.9'
+    shade 'org.bytedeco:javacpp:1.5.9:windows-x86_64'
+    shade 'org.bytedeco:javacpp:1.5.9:linux-x86_64'
+    shade 'org.bytedeco:javacpp:1.5.9:macosx-x86_64'
+    shade 'org.bytedeco:javacpp:1.5.9:macosx-arm64'
 }
 
 jar{
@@ -55,6 +71,11 @@ jar{
     into('META-INF/libraries'){
         from 'libs/'
     }
+
+    from {
+        configurations.shade.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 

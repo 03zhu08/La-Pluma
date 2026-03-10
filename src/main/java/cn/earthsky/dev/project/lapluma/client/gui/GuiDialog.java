@@ -20,6 +20,12 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.OpenGlHelper;
+import net.minecraft.client.renderer.RenderHelper;
+import net.minecraft.client.renderer.entity.RenderManager;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityList;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundCategory;
 import net.minecraftforge.fml.client.FMLClientHandler;
@@ -132,6 +138,7 @@ public class GuiDialog extends GuiScreen {
 
     @Getter private GuiSkipMenu skipMenu;
     @Getter @Setter private boolean showSkipMenu = false;
+    private boolean suppressClosePacket = false;
 
     @Setter private int splitLineColor = 0xffff5733;
 
@@ -146,6 +153,10 @@ public class GuiDialog extends GuiScreen {
         }
     }
 
+    public void suspendForVideo() {
+        this.suppressClosePacket = true;
+    }
+
     @Override
     protected void keyTyped(char typedChar, int keyCode) {
         if(keyCode == Keyboard.KEY_ESCAPE){
@@ -157,12 +168,87 @@ public class GuiDialog extends GuiScreen {
 
     public void clearCharacter(){
         avgCharacters.clear();
+        entityCache.clear();
     }
 
     public void addCharacter(AVGCharacter avg){
         avgCharacters.add(avg);
     }
 
+    private final Map<String, Entity> entityCache = new HashMap<>();
+
+    private Entity resolveEntity(AVGCharacter character) {
+        String key = character.getEntityMode().name() + ":" + character.getIdentity();
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc.world == null) return null;
+
+        switch (character.getEntityMode()) {
+            case CREATE:
+                return entityCache.computeIfAbsent(key, k -> {
+                    ResourceLocation rl = new ResourceLocation(character.getIdentity());
+                    return EntityList.createEntityByIDFromName(rl, mc.world);
+                });
+            case PLAYER:
+                String playerName = character.getIdentity();
+                if ("$self".equalsIgnoreCase(playerName) || "$player".equalsIgnoreCase(playerName)) {
+                    return mc.player;
+                }
+                for (net.minecraft.entity.player.EntityPlayer p : mc.world.playerEntities) {
+                    if (p.getName().equalsIgnoreCase(playerName)) {
+                        return p;
+                    }
+                }
+                return null;
+            case DISPLAY_NAME:
+                String dn = character.getIdentity();
+                for (Entity e : mc.world.loadedEntityList) {
+                    if (e.getDisplayName() != null && e.getDisplayName().getUnformattedText().equals(dn)) {
+                        return e;
+                    }
+                }
+                return null;
+            case UUID:
+                try {
+                    java.util.UUID uuid = java.util.UUID.fromString(character.getIdentity());
+                    for (Entity e : mc.world.loadedEntityList) {
+                        if (e.getUniqueID().equals(uuid)) {
+                            return e;
+                        }
+                    }
+                } catch (IllegalArgumentException ignored) {
+                }
+                return null;
+            default:
+                return null;
+        }
+    }
+
+    private void drawEntityOnScreen(int posX, int posY, float scale, Entity entity) {
+        GlStateManager.enableColorMaterial();
+        GlStateManager.pushMatrix();
+        GlStateManager.translate((float) posX, (float) posY, 50.0F);
+        GlStateManager.scale(-scale, scale, scale);
+        GlStateManager.rotate(180.0F, 0.0F, 0.0F, 1.0F);
+        GlStateManager.rotate(135.0F, 0.0F, 1.0F, 0.0F);
+        RenderHelper.enableStandardItemLighting();
+        GlStateManager.rotate(-135.0F, 0.0F, 1.0F, 0.0F);
+        GlStateManager.rotate(-((float) Math.atan(0)) * 20.0F, 1.0F, 0.0F, 0.0F);
+        GlStateManager.translate(0.0F, 0.0F, 0.0F);
+        RenderManager rendermanager = Minecraft.getMinecraft().getRenderManager();
+        rendermanager.setPlayerViewY(180.0F);
+        rendermanager.setRenderShadow(false);
+        try {
+            rendermanager.renderEntity(entity, 0.0D, 0.0D, 0.0D, 0.0F, 1.0F, false);
+        } catch (Throwable ignored) {
+        }
+        rendermanager.setRenderShadow(true);
+        GlStateManager.popMatrix();
+        RenderHelper.disableStandardItemLighting();
+        GlStateManager.disableRescaleNormal();
+        GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+        GlStateManager.disableTexture2D();
+        GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+    }
 
     private boolean showLog = false;
     private final GuiLogSlider logSlider;
@@ -215,14 +301,34 @@ public class GuiDialog extends GuiScreen {
 
     public void addSelection(Consumer<GuiScreen> callback, String text){
         int size = selectionButtonList.size();
-        GuiSelectionButton but = new GuiSelectionButton(size+1, this.width/2 - 100, 30 + size * 25,text);
+        int keyIndex = size + 1;
+        int btnWidth = (int)(this.width * 0.35);
+        int btnHeight = 20;
+        int btnX = this.width - btnWidth - 10;
+        int btnY = getRectTop() - 10 - (size + 1) * (btnHeight + 4);
+        GuiSelectionButton but = new GuiSelectionButton(keyIndex, btnX, btnY, btnWidth, btnHeight, text, keyIndex);
         selectionButtonList.add(but);
         but.setCallback(callback);
-
-
+        repositionSelections();
     }
 
 
+
+    private void repositionSelections() {
+        int total = selectionButtonList.size();
+        int btnWidth = (int)(this.width * 0.35);
+        int btnHeight = 20;
+        int gap = 4;
+        int btnX = this.width - btnWidth - 10;
+        int baseY = getRectTop() - 10;
+        for (int i = 0; i < total; i++) {
+            GuiSelectionButton but = selectionButtonList.get(i);
+            but.width = btnWidth;
+            but.height = btnHeight;
+            but.x = btnX;
+            but.y = baseY - (total - i) * (btnHeight + gap);
+        }
+    }
 
     public static ConversationStructure EXAMPLE_STRUCTURE;
 
@@ -306,12 +412,7 @@ public class GuiDialog extends GuiScreen {
         skipMenu.onResize(mcIn, w, h);
 
 
-        // GuiSelectionButton but = new GuiSelectionButton(size+1, this.width/2 - 100, 30 + size * 25,text);
-        for(int i = 0; i < selectionButtonList.size();i++){
-            GuiSelectionButton but = selectionButtonList.get(i);
-            but.x = this.width/2 - 100;
-            but.y = 30 + i * 25;
-        }
+        repositionSelections();
 
     }
 
@@ -322,8 +423,46 @@ public class GuiDialog extends GuiScreen {
     @Override
     public void handleKeyboardInput() throws IOException {
         super.handleKeyboardInput();
-        if(Keyboard.isKeyDown(Keyboard.KEY_SPACE)){
-            touchScreen(this.width/2, getRectTop() + 25);
+        if (Keyboard.getEventKeyState()) {
+            int key = Keyboard.getEventKey();
+            if (key == Keyboard.KEY_SPACE) {
+                touchScreen(this.width / 2, getRectTop() + 25);
+            } else if (!selectionButtonList.isEmpty()) {
+                int index = keyToSelectionIndex(key);
+                if (index >= 0 && index < selectionButtonList.size()) {
+                    selectOption(index);
+                }
+            }
+        }
+    }
+
+    private int keyToSelectionIndex(int keyCode) {
+        switch (keyCode) {
+            case Keyboard.KEY_1: return 0;
+            case Keyboard.KEY_2: return 1;
+            case Keyboard.KEY_3: return 2;
+            case Keyboard.KEY_4: return 3;
+            case Keyboard.KEY_5: return 4;
+            case Keyboard.KEY_6: return 5;
+            case Keyboard.KEY_7: return 6;
+            case Keyboard.KEY_8: return 7;
+            case Keyboard.KEY_9: return 8;
+            default: return -1;
+        }
+    }
+
+    private void selectOption(int index) {
+        if (index < 0 || index >= selectionButtonList.size()) return;
+        GuiSelectionButton guibutton = selectionButtonList.get(index);
+        playPressedSound();
+        ProxyPacketHandler.sendPacket(3, cursor * 10 + index, structure.getName());
+        guibutton.getCallback().accept(this);
+        logSlider.addLog("  \u00a7e[" + guibutton.displayString + "]");
+        selectionButtonList.clear();
+        if (!hasContinueStructure) {
+            nextPrompt();
+        } else {
+            hasContinueStructure = false;
         }
     }
 
@@ -446,6 +585,10 @@ public class GuiDialog extends GuiScreen {
     @Override
     public void onGuiClosed() {
         super.onGuiClosed();
+        if (suppressClosePacket) {
+            suppressClosePacket = false;
+            return;
+        }
         ProxyPacketHandler.sendPacket(2,trySkipped ? 1 : 0, structure.getName());
     }
 
@@ -497,21 +640,36 @@ public class GuiDialog extends GuiScreen {
 
         for(AVGCharacter character : avgCharacters){
             try {
-                mc.getTextureManager().bindTexture(new ResourceLocation("lapluma","avg/" + character.getIdentity() + ".png"));
-                GL11.glPushMatrix();
-                GL11.glScaled(widthScaleFactor, heightScaleFactor, 1);
-                // DIM
-                if(hasFX()){
-                    GL11.glColor3f(gAlpha, gAlpha, gAlpha);
-                }else {
-                    if (character.isDimmed()) {
-                        GL11.glColor3f(0.5f, 0.5f, 0.5f);
-                    }else{
-                        GL11.glColor3f(1.0f,1.0f,1.0f);
+                if (character.isEntity()) {
+                    Entity entity = resolveEntity(character);
+                    if (entity != null) {
+                        int entityX = (int) (this.width * (character.getPosition() / 100d));
+                        int entityY = getRectTop() - 10 + character.getEntityYOffset();
+                        float baseScale = 30.0f * character.getEntityScale() * (float) heightScaleFactor;
+                        if (hasFX()) {
+                            GlStateManager.color(gAlpha, gAlpha, gAlpha, 1.0f);
+                        } else if (character.isDimmed()) {
+                            GlStateManager.color(0.5f, 0.5f, 0.5f, 1.0f);
+                        }
+                        drawEntityOnScreen(entityX, entityY, baseScale, entity);
+                        GlStateManager.color(1.0f, 1.0f, 1.0f, 1.0f);
                     }
+                } else {
+                    mc.getTextureManager().bindTexture(new ResourceLocation("lapluma", "avg/" + character.getIdentity() + ".png"));
+                    GL11.glPushMatrix();
+                    GL11.glScaled(widthScaleFactor, heightScaleFactor, 1);
+                    if (hasFX()) {
+                        GL11.glColor3f(gAlpha, gAlpha, gAlpha);
+                    } else {
+                        if (character.isDimmed()) {
+                            GL11.glColor3f(0.5f, 0.5f, 0.5f);
+                        } else {
+                            GL11.glColor3f(1.0f, 1.0f, 1.0f);
+                        }
+                    }
+                    this.drawTexturedModalRect((int) ((this.width * (character.getPosition() / 100d) - 122) / (widthScaleFactor * 2)), (int) ((this.height / 4 - 60) / heightScaleFactor), 0, 0, 256, 256);
+                    GL11.glPopMatrix();
                 }
-                this.drawTexturedModalRect((int) ((this.width*(character.getPosition()/100d)-122)/(widthScaleFactor*2)), (int) ((this.height/4-60)/heightScaleFactor), 0,0,256,256);
-                GL11.glPopMatrix();
             }catch (Throwable throwable){
                 // TODO ERROR
             }

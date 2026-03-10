@@ -2,6 +2,7 @@ package cn.earthsky.dev.project.lapluma;
 
 import cn.earthsky.dev.project.lapluma.common.JournalNamespace;
 import cn.earthsky.dev.project.lapluma.common.commands.PlayJournalCommand;
+import cn.earthsky.dev.project.lapluma.common.commands.PlayVideoCommand;
 import de.cuina.fireandfuel.CodecJLayerMP3;
 import cn.earthsky.dev.project.lapluma.client.gui.GuiDialog;
 import cn.earthsky.dev.project.lapluma.common.network.ProxyPacketHandler;
@@ -80,6 +81,7 @@ public class LaPluma {
     @Mod.EventHandler
     public void init(FMLInitializationEvent event) {
         ClientCommandHandler.instance.registerCommand(new PlayJournalCommand());
+        ClientCommandHandler.instance.registerCommand(new PlayVideoCommand());
     }
 
     /**

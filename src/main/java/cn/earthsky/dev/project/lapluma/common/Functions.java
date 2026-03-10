@@ -1,7 +1,9 @@
 package cn.earthsky.dev.project.lapluma.common;
 
+import cn.earthsky.dev.project.lapluma.LaPluma;
 import cn.earthsky.dev.project.lapluma.client.event.PlayJournalCommandEvent;
 import cn.earthsky.dev.project.lapluma.client.gui.GuiDialog;
+import cn.earthsky.dev.project.lapluma.client.gui.GuiVideoPlayer;
 import cn.earthsky.dev.project.lapluma.client.gui.fx.FXFadeIn;
 import cn.earthsky.dev.project.lapluma.client.gui.fx.FXFadeOut;
 import cn.earthsky.dev.project.lapluma.client.gui.fx.FXShake;
@@ -14,13 +16,99 @@ import net.minecraft.util.SoundCategory;
 import net.minecraft.util.SoundEvent;
 import net.minecraft.util.text.TextComponentString;
 
+import java.io.File;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.logging.Level;
+
 public class Functions {
+
+    private static final String[] VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mkv", ".flv", ".mov", ".wmv", ".ogg"};
+
+    /**
+     * Resolves a local video file name to an absolute path FFmpegFrameGrabber can open.
+     * Search order:
+     *   1. .minecraft/lapluma/videos/<name> (with or without extension)
+     *   2. Resource pack / mod assets: assets/lapluma/videos/<name>
+     * For resource pack sources, the stream is extracted to a temp file.
+     */
+    public static String resolveLocalVideo(String name) {
+        File mcDir = Minecraft.getMinecraft().gameDir;
+        File videosDir = new File(mcDir, "lapluma" + File.separator + "videos");
+
+        if (videosDir.isDirectory()) {
+            File exact = new File(videosDir, name);
+            if (exact.isFile()) return exact.getAbsolutePath();
+
+            for (String ext : VIDEO_EXTENSIONS) {
+                if (name.endsWith(ext)) continue;
+                File withExt = new File(videosDir, name + ext);
+                if (withExt.isFile()) return withExt.getAbsolutePath();
+            }
+        }
+
+        for (String ext : VIDEO_EXTENSIONS) {
+            String resName = name.endsWith(ext) ? name : name + ext;
+            try {
+                InputStream is = Minecraft.getMinecraft().getResourceManager()
+                        .getResource(new ResourceLocation("lapluma", "videos/" + resName))
+                        .getInputStream();
+                File tmpDir = new File(mcDir, "lapluma" + File.separator + "cache");
+                tmpDir.mkdirs();
+                File tmpFile = new File(tmpDir, resName.replace('/', '_'));
+                Files.copy(is, tmpFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                is.close();
+                LaPluma.getLogger().log(Level.INFO, "[Video] Extracted resource video to: " + tmpFile.getAbsolutePath());
+                return tmpFile.getAbsolutePath();
+            } catch (Throwable ignored) {}
+        }
+
+        LaPluma.getLogger().log(Level.WARNING, "[Video] Could not resolve local video: " + name);
+        return null;
+    }
+
     public final static void doFunction(Parsing parsing, GuiDialog screen){
         if(parsing == null || screen == null){
             return;
         }
         if(parsing.getFunctionName().equalsIgnoreCase("clean")){
             screen.clearCharacter();
+        }
+        else if(parsing.getFunctionName().equalsIgnoreCase("entity")){
+            String id = Selector.searchNonNull(parsing.getArguments(),"entity","e","id","type","t","name","n");
+            int pos = Parsers.parseInteger(Selector.searchNonNull(parsing.getArguments(),"pos","p","loc","location","position"), 50);
+            float scale = Parsers.parseFloat(Selector.searchNonNull(parsing.getArguments(),"scale","s","size","sz"), 1.0f);
+            boolean dimmed = Parsers.parseBoolean(Selector.searchNonNull(parsing.getArguments(),"dimmed","dim","dark","d"));
+            int yOffset = Parsers.parseInteger(Selector.searchNonNull(parsing.getArguments(),"y","yoffset","yo","offset"), 0);
+            AVGCharacter character = new AVGCharacter(id, pos, dimmed, AVGCharacter.EntityMode.CREATE, scale, yOffset);
+            screen.addCharacter(character);
+        }
+        else if(parsing.getFunctionName().equalsIgnoreCase("worldEntity")){
+            String player = Selector.searchNonNull(parsing.getArguments(),"player","pl","p");
+            String displayName = Selector.searchNonNull(parsing.getArguments(),"displayname","display","dn","name","n");
+            String uuid = Selector.searchNonNull(parsing.getArguments(),"uuid","u","uid");
+            int pos = Parsers.parseInteger(Selector.searchNonNull(parsing.getArguments(),"pos","loc","location","position"), 50);
+            float scale = Parsers.parseFloat(Selector.searchNonNull(parsing.getArguments(),"scale","s","size","sz"), 1.0f);
+            boolean dimmed = Parsers.parseBoolean(Selector.searchNonNull(parsing.getArguments(),"dimmed","dim","dark","d"));
+            int yOffset = Parsers.parseInteger(Selector.searchNonNull(parsing.getArguments(),"y","yoffset","yo","offset"), 0);
+
+            AVGCharacter.EntityMode mode;
+            String identity;
+            if(player != null){
+                mode = AVGCharacter.EntityMode.PLAYER;
+                identity = player;
+            } else if(uuid != null){
+                mode = AVGCharacter.EntityMode.UUID;
+                identity = uuid;
+            } else if(displayName != null){
+                mode = AVGCharacter.EntityMode.DISPLAY_NAME;
+                identity = displayName;
+            } else {
+                return;
+            }
+            AVGCharacter character = new AVGCharacter(identity, pos, dimmed, mode, scale, yOffset);
+            screen.addCharacter(character);
         }
         else if(parsing.getFunctionName().equalsIgnoreCase("show")){
             String id = Selector.searchNonNull(parsing.getArguments(),"avg","a","actor","act","id","path","val");
@@ -90,11 +178,30 @@ public class Functions {
             Minecraft.getMinecraft().player.sendChatMessage(msg);
         }else if(parsing.getFunctionName().equalsIgnoreCase("reverseSnapshot")){
             screen.reverseSnapshot();
-        }else if(parsing.getFunctionName().equalsIgnoreCase("info")){ // info(title,abstract)
+        }else if(parsing.getFunctionName().equalsIgnoreCase("info")){
             String title = Selector.searchNonNull(parsing.getArguments(),"title","t");
             String abs = Selector.searchNonNull(parsing.getArguments(),"abstract","a","abs","description","desc","d");
             screen.getSkipMenu().setTitle(title);
             screen.getSkipMenu().setDescription(abs);
+        }else if(parsing.getFunctionName().equalsIgnoreCase("video")){
+            String url = Selector.searchNonNull(parsing.getArguments(),"url","u","src","source","link","l");
+            String file = Selector.searchNonNull(parsing.getArguments(),"file","f","path","p","name","n");
+            String skipArg = Selector.searchNonNull(parsing.getArguments(),"skip","skippable","canSkip","allowSkip","allow","esc");
+            boolean allowSkip = skipArg == null || Parsers.parseBoolean(skipArg);
+            String videoSource;
+            if(url != null){
+                videoSource = url;
+            } else if(file != null){
+                videoSource = resolveLocalVideo(file);
+                if(videoSource == null) return;
+            } else {
+                return;
+            }
+            final String finalSource = videoSource;
+            final boolean finalAllowSkip = allowSkip;
+            screen.suspendForVideo();
+            Minecraft.getMinecraft().addScheduledTask(() ->
+                    GuiVideoPlayer.openVideo(finalSource, finalAllowSkip, screen));
         }
     }
 }

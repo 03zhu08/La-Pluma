@@ -10,6 +10,17 @@ A: a quick brown fox jumps over the lazy dog 这是A在说话
 <color(c: 0xFFFFFF55)>
 B: a quick brown fox jumps over the lazy dog 这是B在说话
 <color(c: 0xFFFFFFFF)>
+<clean()>
+<entity(e: minecraft:zombie, pos: 30, scale: 2.0)>
+<entity(e: minecraft:skeleton, pos: 70, scale: 1.5, dim: yes)>
+ :这是实体渲染的演示(按类型创建)，左边是僵尸，右边是骷髅
+<clean()>
+<entity(e: minecraft:creeper, pos: 50, scale: 3.0, y: -20)>
+ :这是一个苦力怕，使用了自定义大小和偏移
+<clean()>
+<worldEntity(player: $self, pos: 50, scale: 2.5)>
+ :这是你自己! 通过玩家名从当前世界获取的实体
+<clean()>
  :这是一个选择过程的演示
 [我觉得烤面筋要用95号汽油]<continue(n: $this.s1)><chat(m: 我要吃95号汽油)>
 [我觉得烤面筋要用97号汽油]<continue(n: $this.s2)><chat(m: 我要吃97号汽油)>
