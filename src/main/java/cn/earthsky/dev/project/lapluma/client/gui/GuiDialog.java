@@ -12,7 +12,7 @@ import cn.earthsky.dev.project.lapluma.common.text.AVGCharacter;
 import cn.earthsky.dev.project.lapluma.common.text.ConversationPrompt;
 import cn.earthsky.dev.project.lapluma.common.text.ConversationStructure;
 import cn.earthsky.dev.project.lapluma.common.text.prompts.FunctionPrompt;
-import cn.earthsky.dev.project.lapluma.common.utils.Timestamp;
+
 import lombok.Data;
 import lombok.Getter;
 import lombok.Setter;
@@ -20,17 +20,19 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.gui.inventory.GuiInventory;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.client.renderer.entity.RenderManager;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityList;
+import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundCategory;
 import net.minecraftforge.fml.client.FMLClientHandler;
 import org.lwjgl.input.Keyboard;
-import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
 
 import java.io.IOException;
@@ -75,6 +77,10 @@ public class GuiDialog extends GuiScreen {
         this.buttonList.add(button);
     }
 
+    public void suspendForVideo(){
+        this.hideHUD = true;
+    }
+
 
 
     @Data
@@ -109,6 +115,9 @@ public class GuiDialog extends GuiScreen {
         this.text = "";
         this.fullText = "";
         this.hasContinueStructure = true;
+        this.dialogAnimState = DialogAnimState.IDLE;
+        this.dialogAnimTick = 0;
+        this.isFirstLine = true;
         fxBlockingQueue.forEach(Runnable::run);
         nextPrompt();
     }
@@ -127,6 +136,9 @@ public class GuiDialog extends GuiScreen {
             this.text = recover.getText();
             this.fullText = "";
             this.hasContinueStructure = true;
+            this.dialogAnimState = DialogAnimState.IDLE;
+            this.dialogAnimTick = 0;
+            this.isFirstLine = true;
             fxBlockingQueue.forEach(Runnable::run);
             nextPrompt();
         }
@@ -138,12 +150,25 @@ public class GuiDialog extends GuiScreen {
 
     @Getter private GuiSkipMenu skipMenu;
     @Getter @Setter private boolean showSkipMenu = false;
-    private boolean suppressClosePacket = false;
 
     @Setter private int splitLineColor = 0xffff5733;
 
+    private enum DialogAnimState { IDLE, SLIDING_OUT, SLIDING_IN }
+    private DialogAnimState dialogAnimState = DialogAnimState.IDLE;
+    private int dialogAnimTick = 0;
+    private static final int ANIM_SLIDE_OUT_TICKS = 4;
+    private static final int ANIM_SLIDE_IN_TICKS = 6;
+    private String pendingSpeaker = null;
+    private String pendingFullText = null;
+    private boolean isFirstLine = true;
+
     private List<GuiSmallButton> smallButtonList = new ArrayList<>();
     @Getter @Setter private boolean centerText = false;
+    private float textProgress = 0f;
+    private static final float TEXT_SPEED = 0.6f;
+    private boolean autoPlay = true;
+    private int autoPlayWaitTick = 0;
+    private static final int AUTO_PLAY_DELAY = 60;
 
     public void setBackground(final String bg){
         if(hasFX()) {
@@ -151,10 +176,6 @@ public class GuiDialog extends GuiScreen {
         }else {
             this.bgName = bg;
         }
-    }
-
-    public void suspendForVideo() {
-        this.suppressClosePacket = true;
     }
 
     @Override
@@ -193,7 +214,7 @@ public class GuiDialog extends GuiScreen {
                 if ("$self".equalsIgnoreCase(playerName) || "$player".equalsIgnoreCase(playerName)) {
                     return mc.player;
                 }
-                for (net.minecraft.entity.player.EntityPlayer p : mc.world.playerEntities) {
+                for (EntityPlayer p : mc.world.playerEntities) {
                     if (p.getName().equalsIgnoreCase(playerName)) {
                         return p;
                     }
@@ -223,32 +244,39 @@ public class GuiDialog extends GuiScreen {
         }
     }
 
-    private void drawEntityOnScreen(int posX, int posY, float scale, Entity entity) {
-        GlStateManager.enableColorMaterial();
-        GlStateManager.pushMatrix();
-        GlStateManager.translate((float) posX, (float) posY, 50.0F);
-        GlStateManager.scale(-scale, scale, scale);
-        GlStateManager.rotate(180.0F, 0.0F, 0.0F, 1.0F);
-        GlStateManager.rotate(135.0F, 0.0F, 1.0F, 0.0F);
-        RenderHelper.enableStandardItemLighting();
-        GlStateManager.rotate(-135.0F, 0.0F, 1.0F, 0.0F);
-        GlStateManager.rotate(-((float) Math.atan(0)) * 20.0F, 1.0F, 0.0F, 0.0F);
-        GlStateManager.translate(0.0F, 0.0F, 0.0F);
-        RenderManager rendermanager = Minecraft.getMinecraft().getRenderManager();
-        rendermanager.setPlayerViewY(180.0F);
-        rendermanager.setRenderShadow(false);
-        try {
-            rendermanager.renderEntity(entity, 0.0D, 0.0D, 0.0D, 0.0F, 1.0F, false);
-        } catch (Throwable ignored) {
+    private void drawEntityOnScreen(int posX, int posY, float scale, float mouseX, float mouseY, Entity entity) {
+        if (entity instanceof EntityLivingBase) {
+            EntityLivingBase living = (EntityLivingBase) entity;
+            float lookX = posX - mouseX;
+            float lookY = posY - scale - mouseY;
+            GuiInventory.drawEntityOnScreen(posX, posY, (int) scale, lookX, lookY, living);
+        } else {
+            GlStateManager.enableColorMaterial();
+            GlStateManager.pushMatrix();
+            GlStateManager.translate((float) posX, (float) posY, 50.0F);
+            GlStateManager.scale(-scale, scale, scale);
+            GlStateManager.rotate(180.0F, 0.0F, 0.0F, 1.0F);
+            GlStateManager.rotate(135.0F, 0.0F, 1.0F, 0.0F);
+            RenderHelper.enableStandardItemLighting();
+            GlStateManager.rotate(-135.0F, 0.0F, 1.0F, 0.0F);
+            GlStateManager.rotate(0, 1.0F, 0.0F, 0.0F);
+            RenderManager rendermanager = Minecraft.getMinecraft().getRenderManager();
+            rendermanager.setPlayerViewY(180.0F);
+            rendermanager.setRenderShadow(false);
+            try {
+                rendermanager.renderEntity(entity, 0.0D, 0.0D, 0.0D, 0.0F, 1.0F, false);
+            } catch (Throwable ignored) {
+            }
+            rendermanager.setRenderShadow(true);
+            GlStateManager.popMatrix();
+            RenderHelper.disableStandardItemLighting();
+            GlStateManager.disableRescaleNormal();
+            GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
+            GlStateManager.disableTexture2D();
+            GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
         }
-        rendermanager.setRenderShadow(true);
-        GlStateManager.popMatrix();
-        RenderHelper.disableStandardItemLighting();
-        GlStateManager.disableRescaleNormal();
-        GlStateManager.setActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GlStateManager.disableTexture2D();
-        GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
     }
+
 
     private boolean showLog = false;
     private final GuiLogSlider logSlider;
@@ -294,59 +322,81 @@ public class GuiDialog extends GuiScreen {
         nextPrompt();
 
         smallButtonList.add(new GuiSmallButton(1,5,5,() -> setShowLog(true), "log", "查看剧情记录"));
-        smallButtonList.add(new GuiSmallButton(2,85,5,() -> this.hideHUD = true, "hide", "隐藏页面"));
-        smallButtonList.add(new GuiSmallButton(3,90,5,() -> showSkipMenu = true, "skip", "跳过此段剧情"));
+        GuiSmallButton autoBtn = new GuiSmallButton(2,80,5,() -> { autoPlay = !autoPlay; autoPlayWaitTick = 0; }, "auto", "自动播放");
+        autoBtn.setActiveSupplier(() -> autoPlay);
+        autoBtn.setActiveText("自动播放中...");
+        smallButtonList.add(autoBtn);
+        smallButtonList.add(new GuiSmallButton(3,85,5,() -> this.hideHUD = true, "hide", "隐藏页面"));
+        smallButtonList.add(new GuiSmallButton(4,90,5,() -> showSkipMenu = true, "skip", "跳过此段剧情"));
 
     }
 
     public void addSelection(Consumer<GuiScreen> callback, String text){
         int size = selectionButtonList.size();
-        int keyIndex = size + 1;
-        int btnWidth = (int)(this.width * 0.35);
-        int btnHeight = 20;
-        int btnX = this.width - btnWidth - 10;
-        int btnY = getRectTop() - 10 - (size + 1) * (btnHeight + 4);
-        GuiSelectionButton but = new GuiSelectionButton(keyIndex, btnX, btnY, btnWidth, btnHeight, text, keyIndex);
+        GuiSelectionButton but = new GuiSelectionButton(size+1, 0, 0, 200, 20, text, size + 1);
         selectionButtonList.add(but);
         but.setCallback(callback);
         repositionSelections();
     }
 
-
-
     private void repositionSelections() {
-        int total = selectionButtonList.size();
-        int btnWidth = (int)(this.width * 0.35);
+        if (selectionButtonList.isEmpty()) return;
+        Minecraft mc = Minecraft.getMinecraft();
+        int maxTextWidth = 0;
+        for (GuiSelectionButton btn : selectionButtonList) {
+            int w = mc.fontRenderer.getStringWidth(btn.displayString);
+            if (w > maxTextWidth) maxTextWidth = w;
+        }
+        int btnWidth = maxTextWidth + 34;
         int btnHeight = 20;
         int gap = 4;
-        int btnX = this.width - btnWidth - 10;
-        int baseY = getRectTop() - 10;
+        int margin = 15;
+        int total = selectionButtonList.size();
+        int btnX = this.width - btnWidth - margin;
+        int baseY = getRectTop() - margin;
         for (int i = 0; i < total; i++) {
-            GuiSelectionButton but = selectionButtonList.get(i);
-            but.width = btnWidth;
-            but.height = btnHeight;
-            but.x = btnX;
-            but.y = baseY - (total - i) * (btnHeight + gap);
+            GuiSelectionButton btn = selectionButtonList.get(i);
+            btn.width = btnWidth;
+            btn.height = btnHeight;
+            btn.x = btnX;
+            btn.y = baseY - (total - i) * (btnHeight + gap);
         }
     }
+
+
 
     public static ConversationStructure EXAMPLE_STRUCTURE;
 
     public void showText(String speaker, String newText){
+        Optional.ofNullable(Minecraft.getMinecraft().world).ifPresent(w -> Optional.ofNullable(Minecraft.getMinecraft().player).ifPresent(p -> w.playSound(p.posX, p.posY, p.posZ, LaPluma.Sounds.CLICK, SoundCategory.MASTER, 0.2f,1f,false)));
+
+        if(logSlider != null) {
+            String logSpeaker = speaker.equalsIgnoreCase("~") ? this.speaker : speaker;
+            logSlider.addLog("§l" + logSpeaker + "§f    " + newText);
+        }
+
+        if (isFirstLine || dialogAnimState != DialogAnimState.IDLE) {
+            applyNewText(speaker, newText);
+            dialogAnimState = DialogAnimState.SLIDING_IN;
+            dialogAnimTick = 0;
+            isFirstLine = false;
+        } else {
+            pendingSpeaker = speaker;
+            pendingFullText = newText;
+            dialogAnimState = DialogAnimState.SLIDING_OUT;
+            dialogAnimTick = 0;
+        }
+    }
+
+    private void applyNewText(String speaker, String newText) {
         this.text = "";
-        if(!speaker.equalsIgnoreCase("~")) {
+        this.textProgress = 0f;
+        if (!speaker.equalsIgnoreCase("~")) {
             this.speaker = speaker;
         }
         this.fullText = newText;
-
-        if(fullText.contains("%")){
+        if (fullText.contains("%")) {
             PlaceholderConnect.submitRequest(fullText);
-        }
-
-        Optional.ofNullable(Minecraft.getMinecraft().world).ifPresent(w -> Optional.ofNullable(Minecraft.getMinecraft().player).ifPresent(p -> w.playSound(p.posX, p.posY, p.posZ, LaPluma.Sounds.BEEP, SoundCategory.MASTER, 0.2f,1f,false)));
-
-        if(logSlider != null) {
-            logSlider.addLog("§l" + this.speaker + "§f    " + newText);
         }
     }
 
@@ -378,10 +428,43 @@ public class GuiDialog extends GuiScreen {
         if(hasFX() && getFX() instanceof FXFade){
             return;
         }
-        if (text.equals(fullText)) {
+
+        if (dialogAnimState == DialogAnimState.SLIDING_OUT) {
+            dialogAnimTick++;
+            if (dialogAnimTick >= ANIM_SLIDE_OUT_TICKS) {
+                applyNewText(pendingSpeaker, pendingFullText);
+                pendingSpeaker = null;
+                pendingFullText = null;
+                dialogAnimState = DialogAnimState.SLIDING_IN;
+                dialogAnimTick = 0;
+            }
             return;
         }
-        text = fullText.substring(0, Math.min(text.length()+1, fullText.length()+1));
+        if (dialogAnimState == DialogAnimState.SLIDING_IN) {
+            dialogAnimTick++;
+            if (dialogAnimTick >= ANIM_SLIDE_IN_TICKS) {
+                dialogAnimState = DialogAnimState.IDLE;
+                dialogAnimTick = 0;
+            }
+        }
+
+        if (text.equals(fullText)) {
+            if (autoPlay && selectionButtonList.isEmpty() && dialogAnimState == DialogAnimState.IDLE && !hasFX()) {
+                autoPlayWaitTick++;
+                if (autoPlayWaitTick >= AUTO_PLAY_DELAY) {
+                    autoPlayWaitTick = 0;
+                    nextPrompt();
+                }
+            }
+            return;
+        }
+        autoPlayWaitTick = 0;
+        textProgress += TEXT_SPEED;
+        int charCount = Math.min((int) textProgress, fullText.length());
+        text = fullText.substring(0, charCount);
+        if (charCount >= fullText.length()) {
+            text = fullText;
+        }
 
     }
 
@@ -395,6 +478,41 @@ public class GuiDialog extends GuiScreen {
         GL11.glPopMatrix();
     }
 
+    private void drawCenteredSplitString(String text, int trimWidth, int top, double textScale, int color) {
+        if(text == null || text.isEmpty()) return;
+
+        float typingProgress = 1.0f;
+        if (fullText != null && !fullText.isEmpty()) {
+            typingProgress = (float) text.length() / fullText.length();
+        }
+        float revealFactor = Math.min(typingProgress * 1.5f, 1.0f);
+
+        GL11.glPushMatrix();
+        GL11.glScaled(textScale, textScale, 1);
+        java.util.List<String> lines = fontRenderer.listFormattedStringToWidth(text, trimWidth);
+        int y = (int) ((top + 22) / textScale);
+        double centerX = this.width / 2.0 / textScale;
+
+        net.minecraft.client.gui.ScaledResolution sr = new net.minecraft.client.gui.ScaledResolution(Minecraft.getMinecraft());
+        int sf = sr.getScaleFactor();
+        int screenPixelWidth = this.width * sf;
+        int revealWidth = (int)(screenPixelWidth * revealFactor);
+        int clipLeft = Math.max((screenPixelWidth - revealWidth) / 2, 0);
+
+        GL11.glEnable(GL11.GL_SCISSOR_TEST);
+        GL11.glScissor(clipLeft, 0, revealWidth, this.height * sf);
+
+        for (String line : lines) {
+            int lineWidth = fontRenderer.getStringWidth(line);
+            int x = (int) (centerX - lineWidth / 2.0);
+            fontRenderer.drawStringWithShadow(line, x, y, color);
+            y += fontRenderer.FONT_HEIGHT;
+        }
+
+        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+        GL11.glPopMatrix();
+    }
+
     public double getHeightScale(){
         return Math.max(Math.ceil(this.height/480d),1f);
     }
@@ -403,17 +521,14 @@ public class GuiDialog extends GuiScreen {
     }
 
     private int getRectTop(){
-        return (this.height/4*3) - 50;
+        return this.height - (int)((this.height / 4 + 50) * 0.7);
     }
 
     @Override
     public void onResize(Minecraft mcIn, int w, int h) {
         super.onResize(mcIn, w, h);
         skipMenu.onResize(mcIn, w, h);
-
-
         repositionSelections();
-
     }
 
     public void playPressedSound(){
@@ -423,50 +538,13 @@ public class GuiDialog extends GuiScreen {
     @Override
     public void handleKeyboardInput() throws IOException {
         super.handleKeyboardInput();
-        if (Keyboard.getEventKeyState()) {
-            int key = Keyboard.getEventKey();
-            if (key == Keyboard.KEY_SPACE) {
-                touchScreen(this.width / 2, getRectTop() + 25);
-            } else if (!selectionButtonList.isEmpty()) {
-                int index = keyToSelectionIndex(key);
-                if (index >= 0 && index < selectionButtonList.size()) {
-                    selectOption(index);
-                }
-            }
-        }
-    }
-
-    private int keyToSelectionIndex(int keyCode) {
-        switch (keyCode) {
-            case Keyboard.KEY_1: return 0;
-            case Keyboard.KEY_2: return 1;
-            case Keyboard.KEY_3: return 2;
-            case Keyboard.KEY_4: return 3;
-            case Keyboard.KEY_5: return 4;
-            case Keyboard.KEY_6: return 5;
-            case Keyboard.KEY_7: return 6;
-            case Keyboard.KEY_8: return 7;
-            case Keyboard.KEY_9: return 8;
-            default: return -1;
-        }
-    }
-
-    private void selectOption(int index) {
-        if (index < 0 || index >= selectionButtonList.size()) return;
-        GuiSelectionButton guibutton = selectionButtonList.get(index);
-        playPressedSound();
-        ProxyPacketHandler.sendPacket(3, cursor * 10 + index, structure.getName());
-        guibutton.getCallback().accept(this);
-        logSlider.addLog("  \u00a7e[" + guibutton.displayString + "]");
-        selectionButtonList.clear();
-        if (!hasContinueStructure) {
-            nextPrompt();
-        } else {
-            hasContinueStructure = false;
+        if(Keyboard.isKeyDown(Keyboard.KEY_SPACE)){
+            touchScreen(this.width/2, getRectTop() + 25);
         }
     }
 
     private void touchScreen(int mouseX, int mouseY){
+        if(dialogAnimState != DialogAnimState.IDLE) return;
         if(hideHUD){
             hideHUD = false;
             return;
@@ -585,10 +663,6 @@ public class GuiDialog extends GuiScreen {
     @Override
     public void onGuiClosed() {
         super.onGuiClosed();
-        if (suppressClosePacket) {
-            suppressClosePacket = false;
-            return;
-        }
         ProxyPacketHandler.sendPacket(2,trySkipped ? 1 : 0, structure.getName());
     }
 
@@ -640,19 +714,21 @@ public class GuiDialog extends GuiScreen {
 
         for(AVGCharacter character : avgCharacters){
             try {
+                int charX = (int)(this.width * (character.getPosition() / 100d));
+                int charY = (int)(this.height * 0.75) + character.getEntityYOffset();
+
                 if (character.isEntity()) {
                     Entity entity = resolveEntity(character);
                     if (entity != null) {
-                        int entityX = (int) (this.width * (character.getPosition() / 100d));
-                        int entityY = getRectTop() - 10 + character.getEntityYOffset();
-                        float baseScale = 30.0f * character.getEntityScale() * (float) heightScaleFactor;
+                        float scale = 50 * character.getEntityScale() * (float) heightScaleFactor;
                         if (hasFX()) {
-                            GlStateManager.color(gAlpha, gAlpha, gAlpha, 1.0f);
+                            GL11.glColor4f(gAlpha, gAlpha, gAlpha, 1.0f);
                         } else if (character.isDimmed()) {
-                            GlStateManager.color(0.5f, 0.5f, 0.5f, 1.0f);
+                            GL11.glColor4f(0.5f, 0.5f, 0.5f, 1.0f);
                         }
-                        drawEntityOnScreen(entityX, entityY, baseScale, entity);
-                        GlStateManager.color(1.0f, 1.0f, 1.0f, 1.0f);
+                        float mx = character.isEntityFollowMouse() ? mouseX : charX;
+                        float my = character.isEntityFollowMouse() ? mouseY : charY - scale;
+                        drawEntityOnScreen(charX, charY, scale, mx, my, entity);
                     }
                 } else {
                     mc.getTextureManager().bindTexture(new ResourceLocation("lapluma", "avg/" + character.getIdentity() + ".png"));
@@ -660,18 +736,15 @@ public class GuiDialog extends GuiScreen {
                     GL11.glScaled(widthScaleFactor, heightScaleFactor, 1);
                     if (hasFX()) {
                         GL11.glColor3f(gAlpha, gAlpha, gAlpha);
+                    } else if (character.isDimmed()) {
+                        GL11.glColor3f(0.5f, 0.5f, 0.5f);
                     } else {
-                        if (character.isDimmed()) {
-                            GL11.glColor3f(0.5f, 0.5f, 0.5f);
-                        } else {
-                            GL11.glColor3f(1.0f, 1.0f, 1.0f);
-                        }
+                        GL11.glColor3f(1.0f, 1.0f, 1.0f);
                     }
                     this.drawTexturedModalRect((int) ((this.width * (character.getPosition() / 100d) - 122) / (widthScaleFactor * 2)), (int) ((this.height / 4 - 60) / heightScaleFactor), 0, 0, 256, 256);
                     GL11.glPopMatrix();
                 }
             }catch (Throwable throwable){
-                // TODO ERROR
             }
         }
 
@@ -683,26 +756,61 @@ public class GuiDialog extends GuiScreen {
             }
 
             if(showDialog) {
+                float animAlpha = 1.0f;
+                int animYOffset = 0;
+                int slideDistance = 50;
+
+                if (dialogAnimState == DialogAnimState.SLIDING_OUT) {
+                    float progress = Math.min((dialogAnimTick + partialTicks) / ANIM_SLIDE_OUT_TICKS, 1.0f);
+                    float eased = progress * progress;
+                    animAlpha = 1.0f - eased;
+                    animYOffset = (int)(eased * slideDistance);
+                } else if (dialogAnimState == DialogAnimState.SLIDING_IN) {
+                    float progress = Math.min((dialogAnimTick + partialTicks) / ANIM_SLIDE_IN_TICKS, 1.0f);
+                    float eased = 1.0f - (1.0f - progress) * (1.0f - progress) * (1.0f - progress);
+                    animAlpha = eased;
+                    animYOffset = (int)((1.0f - eased) * slideDistance);
+                }
+
+                int alphaInt = (int)(animAlpha * 255) & 0xFF;
+
                 if (!centerText) {
-                    int top = getRectTop();
-                    this.drawGradientRect(0, top, this.width, this.height, -1072689136, -804253680);
-                    GL11.glColor3f(1f,1f,1f);
+                    int top = getRectTop() + animYOffset;
+                    int bottom = this.height + animYOffset;
+                    int totalHeight = bottom - top;
+                    int strips = Math.min(128, totalHeight);
+                    float minAlpha = 0x0;
+                    float maxAlpha = 0x90;
+                    for (int s = 0; s < strips; s++) {
+                        int sTop = top + (int)((float) s / strips * totalHeight);
+                        int sBot = top + (int)((float)(s + 1) / strips * totalHeight);
+                        float t1 = (float) s / strips;
+                        float t2 = (float) (s + 1) / strips;
+                        int a1 = (int)((minAlpha + (maxAlpha - minAlpha) * t1) * animAlpha) & 0xFF;
+                        int a2 = (int)((minAlpha + (maxAlpha - minAlpha) * t2) * animAlpha) & 0xFF;
+                        this.drawGradientRect(0, sTop, this.width, sBot, (a1 << 24) | 0x101010, (a2 << 24) | 0x101010);
+                    }
+                    GL11.glColor4f(1f, 1f, 1f, animAlpha);
                     if(LaPluma.hasDialogBubbleProvided){
+                        GL11.glEnable(GL11.GL_BLEND);
+                        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
                         mc.getTextureManager().bindTexture(new ResourceLocation("lapluma:icon/dialog_bubble.png"));
                         Gui.drawModalRectWithCustomSizedTexture(0, top, 0,0,this.width,this.height-top,this.width,this.height-top);
+                        GL11.glDisable(GL11.GL_BLEND);
                     }
 
-                    this.drawHorizontalLine((int) (this.width / 2 - 50 * getWidthScale()), (int) (width / 2 + 50 * getWidthScale()), top + 17, splitLineColor);
-                    this.drawCenteredLargeString(speaker, this.width / 2f, (float) (top + 15), getHeightScale() * 1.5d, 0xffffffff);
-                    int blanketSize = (int) (20 * getWidthScale());
-                    int trimWidth = (int) ((this.width - blanketSize * 4) / (getWidthScale() * 1.3));
-                    double textScale = getHeightScale() * 1.5d;
-                    GL11.glPushMatrix();
-                    GL11.glScaled(textScale, textScale, 1);
-                    this.fontRenderer.drawSplitString(text, (int) (blanketSize / textScale), (int) ((top + 22) / textScale), trimWidth, 0xffDCDCDC);
-                    GL11.glPopMatrix();
+                    int lineColor = (alphaInt << 24) | (splitLineColor & 0x00FFFFFF);
+                    this.drawHorizontalLine((int) (this.width / 2 - 50 * getWidthScale()), (int) (width / 2 + 50 * getWidthScale()), top + 17, lineColor);
+                    int speakerColor = (alphaInt << 24) | 0xFFFFFF;
+                    this.drawCenteredLargeString(speaker, this.width / 2f, (float) (top + 15), getHeightScale() * 1.5d, speakerColor);
+                    int padding = 20;
+                    int trimWidth = this.width - padding * 2;
+                    int textColor = (alphaInt << 24) | 0xDCDCDC;
+                    drawCenteredSplitString(text, trimWidth, top, 1.0d, textColor);
+                    GL11.glColor4f(1f, 1f, 1f, 1f);
                 } else {
-                    drawCenteredLargeString(text, this.width / 2f, this.height / 2f, getHeightScale() * 2, 0xFFFFFFFF);
+                    int centerColor = (alphaInt << 24) | 0xFFFFFF;
+                    drawCenteredLargeString(text, this.width / 2f, this.height / 2f + animYOffset, getHeightScale() * 2, centerColor);
                 }
             }
 

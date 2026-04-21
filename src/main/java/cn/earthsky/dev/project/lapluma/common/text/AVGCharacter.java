@@ -13,6 +13,7 @@ public class AVGCharacter {
     @Setter EntityMode entityMode = EntityMode.NONE;
     @Setter float entityScale = 1.0f;
     @Setter int entityYOffset = 0;
+    @Setter boolean entityFollowMouse = false;
 
     @Getter
     public enum EntityMode {
@@ -34,5 +35,6 @@ public class AVGCharacter {
         this.entityMode = EntityMode.NONE;
         this.entityScale = 1.0f;
         this.entityYOffset = 0;
+        this.entityFollowMouse = false;
     }
 }

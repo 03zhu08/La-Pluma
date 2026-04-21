@@ -16,8 +16,37 @@ apply plugin: "net.minecraftforge.gradle.forge"
 
 [compileJava, compileTestJava, javadoc]*.options*.encoding = 'UTF-8'
 
+def detectCurrentPlatform = {
+    String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT)
+    String osArch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT)
+    if (osName.contains("win")) {
+        return "windows-x86_64"
+    }
+    if (osName.contains("mac") || osName.contains("darwin")) {
+        return (osArch.contains("aarch64") || osArch.contains("arm")) ? "macosx-arm64" : "macosx-x86_64"
+    }
+    return "linux-x86_64"
+}
+
+ext {
+    javacvVersion = "1.5.9"
+    ffmpegVersion = "6.0-1.5.9"
+    supportedPlatforms = [
+            "windows-x86_64": "Windows x86_64",
+            "linux-x86_64"  : "Linux x86_64",
+            "macosx-x86_64" : "macOS x86_64",
+            "macosx-arm64"  : "macOS arm64",
+    ]
+    currentPlatform = detectCurrentPlatform()
+    targetPlatform = (findProperty("targetPlatform") ?: currentPlatform).toString()
+}
+
+if (!supportedPlatforms.containsKey(targetPlatform)) {
+    throw new GradleException("Unsupported targetPlatform '${targetPlatform}'. Supported values: ${supportedPlatforms.keySet().join(', ')}")
+}
+
 group = 'EarthSkyDev'
-version = '1.3.1-SNAPSHOT'
+version = '1.4.0-SNAPSHOT'
 archivesBaseName = 'La Pluma'
 
 minecraft {
@@ -49,23 +78,19 @@ dependencies {
     testCompileOnly 'org.projectlombok:lombok:1.18.24'
     testAnnotationProcessor 'org.projectlombok:lombok:1.18.24'
 
-    shade 'org.bytedeco:javacv:1.5.9'
-    shade 'org.bytedeco:ffmpeg:6.0-1.5.9'
-    shade 'org.bytedeco:ffmpeg:6.0-1.5.9:windows-x86_64'
-    shade 'org.bytedeco:ffmpeg:6.0-1.5.9:linux-x86_64'
-    shade 'org.bytedeco:ffmpeg:6.0-1.5.9:macosx-x86_64'
-    shade 'org.bytedeco:ffmpeg:6.0-1.5.9:macosx-arm64'
-    shade 'org.bytedeco:javacpp:1.5.9'
-    shade 'org.bytedeco:javacpp:1.5.9:windows-x86_64'
-    shade 'org.bytedeco:javacpp:1.5.9:linux-x86_64'
-    shade 'org.bytedeco:javacpp:1.5.9:macosx-x86_64'
-    shade 'org.bytedeco:javacpp:1.5.9:macosx-arm64'
+    shade "org.bytedeco:javacv:${javacvVersion}"
+    shade "org.bytedeco:ffmpeg:${ffmpegVersion}"
+    shade "org.bytedeco:javacpp:${javacvVersion}"
+    shade "org.bytedeco:ffmpeg:${ffmpegVersion}:${targetPlatform}"
+    shade "org.bytedeco:javacpp:${javacvVersion}:${targetPlatform}"
 }
 
 jar{
+    classifier = targetPlatform
     manifest{
         attributes 'FMLAT' : "lapluma_at.cfg"
         attributes 'ContainedDeps': "codecjlayermp3-1.0.0-SNAPSHOT.jar jlayer-1.0.1.jar"
+        attributes 'LaPluma-TargetPlatform': targetPlatform
     }
 
     into('META-INF/libraries'){
@@ -76,6 +101,25 @@ jar{
         configurations.shade.collect { it.isDirectory() ? it : zipTree(it) }
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+task printTargetPlatform {
+    group = "build"
+    description = "Prints the platform baked into this jar."
+    doLast {
+        println "Building La Pluma for ${supportedPlatforms[targetPlatform]} (${targetPlatform})"
+        println "Override with: ./gradlew clean build -PtargetPlatform=<${supportedPlatforms.keySet().join('|')}>"
+    }
+}
+
+task printPlatformBuildCommands {
+    group = "build"
+    description = "Shows the commands for each platform-specific release jar."
+    doLast {
+        supportedPlatforms.each { platformId, platformName ->
+            println "${platformName}: ./gradlew clean build -PtargetPlatform=${platformId}"
+        }
+    }
 }
 
 

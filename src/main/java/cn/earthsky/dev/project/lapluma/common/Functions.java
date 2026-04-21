@@ -81,7 +81,8 @@ public class Functions {
             float scale = Parsers.parseFloat(Selector.searchNonNull(parsing.getArguments(),"scale","s","size","sz"), 1.0f);
             boolean dimmed = Parsers.parseBoolean(Selector.searchNonNull(parsing.getArguments(),"dimmed","dim","dark","d"));
             int yOffset = Parsers.parseInteger(Selector.searchNonNull(parsing.getArguments(),"y","yoffset","yo","offset"), 0);
-            AVGCharacter character = new AVGCharacter(id, pos, dimmed, AVGCharacter.EntityMode.CREATE, scale, yOffset);
+            boolean followMouse = Parsers.parseBoolean(Selector.searchNonNull(parsing.getArguments(),"follow","mouse","cursor","fm"));
+            AVGCharacter character = new AVGCharacter(id, pos, dimmed, AVGCharacter.EntityMode.CREATE, scale, yOffset, followMouse);
             screen.addCharacter(character);
         }
         else if(parsing.getFunctionName().equalsIgnoreCase("worldEntity")){
@@ -92,6 +93,7 @@ public class Functions {
             float scale = Parsers.parseFloat(Selector.searchNonNull(parsing.getArguments(),"scale","s","size","sz"), 1.0f);
             boolean dimmed = Parsers.parseBoolean(Selector.searchNonNull(parsing.getArguments(),"dimmed","dim","dark","d"));
             int yOffset = Parsers.parseInteger(Selector.searchNonNull(parsing.getArguments(),"y","yoffset","yo","offset"), 0);
+            boolean followMouse = Parsers.parseBoolean(Selector.searchNonNull(parsing.getArguments(),"follow","mouse","cursor","fm"));
 
             AVGCharacter.EntityMode mode;
             String identity;
@@ -107,7 +109,7 @@ public class Functions {
             } else {
                 return;
             }
-            AVGCharacter character = new AVGCharacter(identity, pos, dimmed, mode, scale, yOffset);
+            AVGCharacter character = new AVGCharacter(identity, pos, dimmed, mode, scale, yOffset, followMouse);
             screen.addCharacter(character);
         }
         else if(parsing.getFunctionName().equalsIgnoreCase("show")){

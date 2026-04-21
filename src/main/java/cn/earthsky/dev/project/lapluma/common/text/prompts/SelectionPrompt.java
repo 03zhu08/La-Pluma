@@ -4,7 +4,6 @@ import cn.earthsky.dev.project.lapluma.client.gui.GuiDialog;
 import cn.earthsky.dev.project.lapluma.common.Functions;
 import cn.earthsky.dev.project.lapluma.common.Parsing;
 import cn.earthsky.dev.project.lapluma.common.text.ConversationPrompt;
-import jdk.nashorn.internal.ir.EmptyNode;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

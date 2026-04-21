@@ -26,6 +26,31 @@ assets/
 
 目前, 在游戏中可以通过指令调出对应剧本进行播放演绎, 服务端也可以通过指令使装有对应Mod与资源包的玩家播放剧情.
 
+## 构建
+项目现在支持按平台分别打包视频解码 native，以减小单个 Mod JAR 体积。
+由于项目仍基于 ForgeGradle 2.3 / Minecraft 1.12.2，构建时应使用完整的 JDK 8。
+`build-platform-jars.sh` 会优先自动选择本机可用的 JDK 8。
+
+单平台构建:
+```bash
+./gradlew clean build -PtargetPlatform=windows-x86_64
+./gradlew clean build -PtargetPlatform=linux-x86_64
+./gradlew clean build -PtargetPlatform=macosx-x86_64
+./gradlew clean build -PtargetPlatform=macosx-arm64
+```
+
+一键构建全部平台:
+```bash
+bash ./build-platform-jars.sh
+```
+
+只构建指定平台:
+```bash
+bash ./build-platform-jars.sh windows-x86_64 macosx-arm64
+```
+
+构建产物位于 `build/libs/`，文件名会带对应平台后缀。
+
 ## 开发计划
 施工中
 
