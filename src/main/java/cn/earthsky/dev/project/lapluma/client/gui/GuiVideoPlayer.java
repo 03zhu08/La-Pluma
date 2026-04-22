@@ -88,7 +88,6 @@ public class GuiVideoPlayer extends GuiScreen {
     private int texHeight;
 
     private final AtomicBoolean playing = new AtomicBoolean(false);
-    private final AtomicBoolean paused = new AtomicBoolean(false);
     private final AtomicBoolean finished = new AtomicBoolean(false);
     private final AtomicBoolean failed = new AtomicBoolean(false);
     private final AtomicReference<String> statusText = new AtomicReference<>("视频加载中...");
@@ -188,11 +187,6 @@ public class GuiVideoPlayer extends GuiScreen {
                 int videoFrames = 0;
                 int audioFrames = 0;
                 while (!finished.get()) {
-                    if (paused.get()) {
-                        Thread.sleep(50L);
-                        continue;
-                    }
-
                     Frame frame = grabber.grab();
                     if (frame == null) {
                         break;
@@ -756,10 +750,6 @@ public class GuiVideoPlayer extends GuiScreen {
         if (failed.get()) {
             this.drawCenteredString(this.fontRenderer, "§c" + statusText.get(), this.width / 2, this.height / 2, 0xFFFF5555);
         }
-        if (paused.get() && playing.get()) {
-            this.drawCenteredString(this.fontRenderer, "§e|| 已暂停", this.width / 2, this.height / 2 - 20, 0xFFFFFF);
-        }
-
         drawTimeText();
         if (allowSkip) {
             drawSkipButton(mouseX, mouseY);
@@ -836,8 +826,6 @@ public class GuiVideoPlayer extends GuiScreen {
             if (allowSkip) {
                 requestClose();
             }
-        } else if (keyCode == Keyboard.KEY_SPACE) {
-            paused.set(!paused.get());
         }
     }
 

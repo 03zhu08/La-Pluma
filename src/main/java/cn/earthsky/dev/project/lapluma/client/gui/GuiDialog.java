@@ -164,7 +164,6 @@ public class GuiDialog extends GuiScreen {
     private List<GuiSmallButton> smallButtonList = new ArrayList<>();
     @Getter @Setter private boolean centerText = false;
     private float textProgress = 0f;
-    private float charFadeAlpha = 0f;
     private static final float TEXT_SPEED = 0.8f;
     private boolean autoPlay = true;
     private int autoPlayWaitTick = 0;
@@ -424,7 +423,6 @@ public class GuiDialog extends GuiScreen {
     private void applyNewText(String speaker, String newText) {
         this.text = "";
         this.textProgress = 0f;
-        this.charFadeAlpha = 0f;
         if (!speaker.equalsIgnoreCase("~")) {
             this.speaker = speaker;
         }
@@ -496,7 +494,6 @@ public class GuiDialog extends GuiScreen {
         textProgress += TEXT_SPEED;
         int charCount = Math.min((int) textProgress, fullText.length());
         text = fullText.substring(0, charCount);
-        charFadeAlpha = charCount < fullText.length() ? textProgress - charCount : 1.0f;
         if (charCount >= fullText.length()) {
             text = fullText;
         }
@@ -513,8 +510,12 @@ public class GuiDialog extends GuiScreen {
         GL11.glPopMatrix();
     }
 
-    private void drawCenteredSplitString(String text, int trimWidth, int top, double textScale, int color) {
+    private void drawCenteredSplitString(int trimWidth, int top, double textScale, int color, float partialTicks) {
         if(fullText == null || fullText.isEmpty()) return;
+
+        float renderProgress = Math.min(textProgress + TEXT_SPEED * partialTicks, fullText.length());
+        int renderChars = (int) renderProgress;
+        float renderFraction = renderProgress - renderChars;
 
         GL11.glPushMatrix();
         GL11.glScaled(textScale, textScale, 1);
@@ -527,7 +528,7 @@ public class GuiDialog extends GuiScreen {
         int scaleFactor = sr.getScaleFactor();
         int displayH = Minecraft.getMinecraft().displayHeight;
 
-        int charsRemaining = text.length();
+        int charsRemaining = renderChars;
         boolean maskDone = false;
 
         for (String fullLine : fullLines) {
@@ -538,12 +539,12 @@ public class GuiDialog extends GuiScreen {
 
             if (showCount >= fullLine.length()) {
                 fontRenderer.drawStringWithShadow(fullLine, lineX, y, color);
-            } else if (!maskDone && text.length() < fullText.length()) {
+            } else if (!maskDone && renderChars < fullText.length()) {
                 maskDone = true;
                 String revealed = showCount > 0 ? fullLine.substring(0, showCount) : "";
                 int revealedW = fontRenderer.getStringWidth(revealed);
                 float extra = showCount < fullLine.length()
-                        ? charFadeAlpha * fontRenderer.getCharWidth(fullLine.charAt(showCount)) : 0;
+                        ? renderFraction * fontRenderer.getCharWidth(fullLine.charAt(showCount)) : 0;
                 int maskW = (int) Math.ceil(revealedW + extra) + 2;
 
                 int fbX = (int)(lineX * textScale * scaleFactor);
@@ -632,13 +633,14 @@ public class GuiDialog extends GuiScreen {
                 skipMenu.mouseClicked(mouseX, mouseY, 0, this);
             }else {
                 if (mouseY > getRectTop() + 17 && !centerText && !hasFX()) {
-                    // SKIP
+                    if (autoPlay) { autoPlay = false; autoPlayWaitTick = 0; }
                     if (text.equals(fullText)) {
                         nextPrompt();
                     } else {
                         text = fullText;
                     }
                 }else if(centerText && Math.abs(mouseY-height/2) < 60){
+                    if (autoPlay) { autoPlay = false; autoPlayWaitTick = 0; }
                     if (text.equals(fullText)) {
                         nextPrompt();
                     } else {
@@ -856,20 +858,24 @@ public class GuiDialog extends GuiScreen {
                     int padding = 20;
                     int trimWidth = this.width - padding * 2;
                     int textColor = (alphaInt << 24) | 0xDCDCDC;
-                    drawCenteredSplitString(text, trimWidth, top, 1.0d, textColor);
+                    drawCenteredSplitString(trimWidth, top, 1.0d, textColor, partialTicks);
                     GL11.glColor4f(1f, 1f, 1f, 1f);
                 } else {
                     int centerColor = (alphaInt << 24) | 0xFFFFFF;
                     double cScale = Math.max(getHeightScale() * 2, 1);
-                    if (text.length() < fullText.length()) {
+                    float renderProgress = Math.min(textProgress + TEXT_SPEED * partialTicks, fullText.length());
+                    int renderChars = (int) renderProgress;
+                    float renderFraction = renderProgress - renderChars;
+                    if (renderChars < fullText.length()) {
                         GL11.glPushMatrix();
                         GL11.glScaled(cScale, cScale, 1.0F);
                         int sx = (int)(this.width / 2f / cScale);
                         int sy = (int)((this.height / 2f + animYOffset) / cScale - fontRenderer.FONT_HEIGHT);
                         int fullW = fontRenderer.getStringWidth(fullText);
                         int startX = sx - fullW / 2;
-                        int revealedW = fontRenderer.getStringWidth(text);
-                        float extra = charFadeAlpha * fontRenderer.getCharWidth(fullText.charAt(text.length()));
+                        String revealedPart = fullText.substring(0, renderChars);
+                        int revealedW = fontRenderer.getStringWidth(revealedPart);
+                        float extra = renderFraction * fontRenderer.getCharWidth(fullText.charAt(renderChars));
                         int maskW = (int) Math.ceil(revealedW + extra) + 2;
 
                         net.minecraft.client.gui.ScaledResolution sr2 = new net.minecraft.client.gui.ScaledResolution(mc);
