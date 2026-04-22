@@ -89,12 +89,11 @@ jar{
     classifier = targetPlatform
     manifest{
         attributes 'FMLAT' : "lapluma_at.cfg"
-        attributes 'ContainedDeps': "codecjlayermp3-1.0.0-SNAPSHOT.jar jlayer-1.0.1.jar"
         attributes 'LaPluma-TargetPlatform': targetPlatform
     }
 
-    into('META-INF/libraries'){
-        from 'libs/'
+    from(fileTree(dir: 'libs', include: '*.jar').files.collect { zipTree(it) }) {
+        exclude 'META-INF/**'
     }
 
     from {

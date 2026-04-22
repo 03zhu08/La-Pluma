@@ -11,16 +11,17 @@ import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.util.ResourceLocation;
+import org.bytedeco.ffmpeg.global.avutil;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
-import org.bytedeco.javacv.Java2DFrameConverter;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 
-import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayDeque;
@@ -42,8 +43,7 @@ public class GuiVideoPlayer extends GuiScreen {
     private static final int HTTP_READ_TIMEOUT_MS = 15_000;
     private static final int MAX_HTTP_REDIRECTS = 8;
     private static final int MAX_HTML_BYTES = 32_768;
-    private static final int MAX_PENDING_VIDEO_FRAMES = 30;
-    private static final long STARTUP_PREBUFFER_AUDIO_MICROS = 100_000L;
+    private static final int MAX_PENDING_VIDEO_FRAMES = 900;
     private static final Pattern TARGET_INPUT_PATTERN = Pattern.compile(
             "<input[^>]*id=[\"']target[\"'][^>]*value=[\"']([^\"']+)[\"']",
             Pattern.CASE_INSENSITIVE);
@@ -96,13 +96,14 @@ public class GuiVideoPlayer extends GuiScreen {
 
     private volatile long durationMicros = 0;
     private volatile long currentTimeMicros = 0;
-    private volatile int prebufferFrameTarget = 1;
+    private volatile long playbackStartNanos = -1L;
+    private volatile int prebufferFrameTarget = 5;
     private volatile boolean restoreScreenOnClose = true;
     private volatile boolean notifyServerOnClose = true;
 
     private Thread decoderThread;
     private VideoAudioPlayer audioPlayer;
-    private Java2DFrameConverter converter;
+    private ByteArrayOutputStream audioPreBuffer;
 
     private GuiSmallButton skipButton;
 
@@ -142,20 +143,25 @@ public class GuiVideoPlayer extends GuiScreen {
             FFmpegFrameGrabber grabber = null;
             try {
                 NativeExtractor.ensureExtracted();
-                converter = new Java2DFrameConverter();
                 ResolvedVideoSource resolvedSource = resolveVideoSource(source);
                 String grabberSource = resolvedSource.playbackUrl;
-                boolean needsCacheAfterPlay = false;
-                if (isHttpSource(grabberSource)) {
+                boolean isLocalPlayback = !isHttpSource(grabberSource);
+                if (!isLocalPlayback) {
                     String cached = getCachedVideoPath(grabberSource);
                     if (cached != null) {
                         grabberSource = cached;
+                        isLocalPlayback = true;
                     } else {
-                        needsCacheAfterPlay = true;
+                        String downloaded = downloadToCache(grabberSource, resolvedSource.referer);
+                        if (downloaded != null) {
+                            grabberSource = downloaded;
+                            isLocalPlayback = true;
+                        }
                     }
                 }
                 grabber = new FFmpegFrameGrabber(grabberSource);
                 grabber.setImageMode(FFmpegFrameGrabber.ImageMode.COLOR);
+                grabber.setPixelFormat(avutil.AV_PIX_FMT_BGRA);
                 if (isHttpSource(grabberSource)) {
                     configureGrabber(grabber, resolvedSource);
                 }
@@ -164,38 +170,26 @@ public class GuiVideoPlayer extends GuiScreen {
                 durationMicros = Math.max(0, grabber.getLengthInTime());
                 double frameRate = grabber.getFrameRate() > 0 ? grabber.getFrameRate() : 30.0;
                 int totalFrames = (int)(durationMicros / 1_000_000.0 * frameRate);
-                prebufferFrameTarget = Math.max(1, (int)(totalFrames * 0.2));
+                prebufferFrameTarget = isLocalPlayback ? 5 : Math.max(5, (int)(totalFrames * 0.2));
                 statusText.set("视频缓冲中...");
 
                 LaPluma.getLogger().log(Level.INFO, "[Video] Started: " + resolvedSource.playbackUrl
                         + " (" + grabber.getImageWidth() + "x" + grabber.getImageHeight()
-                        + ", " + String.format("%.1f", grabber.getFrameRate()) + "fps)");
+                        + ", " + String.format("%.1f", grabber.getFrameRate()) + "fps"
+                        + ", prebuffer=" + prebufferFrameTarget + " frames)");
 
                 final int audioChannels = Math.max(1, grabber.getAudioChannels());
+                final boolean hasAudio = grabber.getAudioChannels() > 0 && grabber.getSampleRate() > 0;
+                final int sampleRate = grabber.getSampleRate();
                 boolean audioOpened = false;
-                if (grabber.getAudioChannels() > 0 && grabber.getSampleRate() > 0) {
-                    audioOpened = audioPlayer.open(grabber.getSampleRate(), audioChannels, 16);
-                    LaPluma.getLogger().log(Level.INFO, "[Video] Audio opened: " + audioOpened
-                            + ", channels=" + audioChannels
-                            + ", sampleRate=" + grabber.getSampleRate());
-                }
                 boolean playbackStarted = false;
-                if (!audioOpened) {
-                    playbackStarted = true;
-                    playing.set(true);
-                    statusText.set("视频播放中");
-                }
-
-                long playbackStartMicros = -1L;
-                long playbackStartNanos = -1L;
+                audioPreBuffer = hasAudio ? new ByteArrayOutputStream() : null;
 
                 int videoFrames = 0;
                 int audioFrames = 0;
                 while (!finished.get()) {
                     if (paused.get()) {
                         Thread.sleep(50L);
-                        playbackStartMicros = -1L;
-                        playbackStartNanos = -1L;
                         continue;
                     }
 
@@ -205,36 +199,50 @@ public class GuiVideoPlayer extends GuiScreen {
                     }
 
                     long frameTimestampMicros = Math.max(0L, grabber.getTimestamp());
-                    if (playbackStartMicros < 0L) {
-                        playbackStartMicros = frameTimestampMicros;
-                        playbackStartNanos = System.nanoTime();
-                    }
                     currentTimeMicros = Math.max(currentTimeMicros, frameTimestampMicros);
 
-                    if (frame.image != null) {
+                    if (frame.image != null && frame.image.length > 0) {
                         videoFrames++;
-                        syncVideoFrame(frameTimestampMicros, playbackStartMicros, playbackStartNanos);
-                        BufferedImage img = converter.convert(frame);
-                        if (img != null) {
-                            int w = img.getWidth();
-                            int h = img.getHeight();
-                            int[] pixels = img.getRGB(0, 0, w, h, null, 0, w);
-                            enqueueVideoFrame(frameTimestampMicros, w, h, pixels);
+                        ByteBuffer buf = (ByteBuffer) frame.image[0];
+                        int w = frame.imageWidth;
+                        int h = frame.imageHeight;
+                        int stride = frame.imageStride;
+                        int[] pixels = new int[w * h];
+                        buf.order(ByteOrder.LITTLE_ENDIAN);
+                        buf.position(0);
+                        if (stride == w * 4) {
+                            buf.asIntBuffer().get(pixels);
+                        } else {
+                            for (int row = 0; row < h; row++) {
+                                buf.position(row * stride);
+                                buf.asIntBuffer().get(pixels, row * w, w);
+                            }
                         }
+                        enqueueVideoFrame(frameTimestampMicros, w, h, pixels);
                     }
 
-                    if (frame.samples != null && audioOpened) {
+                    if (frame.samples != null && hasAudio) {
                         audioFrames++;
                         writeAudioFrame(frame, audioChannels);
                     }
 
-                    if (!playbackStarted && shouldStartPlayback(audioOpened)) {
-                        audioPlayer.start();
+                    if (!playbackStarted && videoFrames >= prebufferFrameTarget) {
+                        int audioBufferedBytes = 0;
+                        if (hasAudio) {
+                            audioOpened = audioPlayer.open(sampleRate, audioChannels, 16);
+                            byte[] buffered = audioPreBuffer.toByteArray();
+                            audioBufferedBytes = buffered.length;
+                            audioPreBuffer = null;
+                            if (buffered.length > 0) {
+                                audioPlayer.write(buffered, 0, buffered.length);
+                            }
+                        }
+                        playbackStartNanos = System.nanoTime();
                         playbackStarted = true;
                         playing.set(true);
                         statusText.set("视频播放中");
-                        LaPluma.getLogger().log(Level.INFO, "[Video] Playback started after prebuffer: videoFrames="
-                                + getPendingFrameCount() + ", audioBufferedMicros=" + audioPlayer.getBufferedMicros());
+                        LaPluma.getLogger().log(Level.INFO, "[Video] Playback started after prebuffer: "
+                                + videoFrames + " frames, audio buffered=" + audioBufferedBytes + " bytes");
                     }
 
                     if ((videoFrames + audioFrames) % 120 == 1) {
@@ -246,9 +254,6 @@ public class GuiVideoPlayer extends GuiScreen {
                 currentTimeMicros = Math.max(currentTimeMicros, durationMicros);
                 statusText.set("Finished");
                 LaPluma.getLogger().log(Level.INFO, "[Video] Decode loop ended, videoFrames=" + videoFrames + " audioFrames=" + audioFrames);
-                if (needsCacheAfterPlay && !failed.get()) {
-                    startCacheDownload(resolvedSource.playbackUrl, resolvedSource.referer);
-                }
             } catch (Throwable e) {
                 failed.set(true);
                 statusText.set("Error: " + e.getMessage());
@@ -276,20 +281,10 @@ public class GuiVideoPlayer extends GuiScreen {
         decoderThread.start();
     }
 
-    private boolean shouldStartPlayback(boolean audioOpened) {
-        if (!audioOpened) {
-            return getPendingFrameCount() >= 1;
-        }
-        return getPendingFrameCount() >= prebufferFrameTarget
-                && audioPlayer != null
-                && audioPlayer.getBufferedMicros() >= STARTUP_PREBUFFER_AUDIO_MICROS;
-    }
-
     private void enqueueVideoFrame(long timestampMicros, int width, int height, int[] pixels) {
         synchronized (pendingFrames) {
             pendingFrames.addLast(new TimedVideoFrame(timestampMicros, width, height, pixels));
-            int cap = Math.max(MAX_PENDING_VIDEO_FRAMES, prebufferFrameTarget + 10);
-            while (pendingFrames.size() > cap) {
+            while (pendingFrames.size() > MAX_PENDING_VIDEO_FRAMES) {
                 pendingFrames.removeFirst();
             }
         }
@@ -299,18 +294,6 @@ public class GuiVideoPlayer extends GuiScreen {
         synchronized (pendingFrames) {
             return pendingFrames.size();
         }
-    }
-
-    private void syncVideoFrame(long frameTimestampMicros, long playbackStartMicros, long playbackStartNanos) throws InterruptedException {
-        long targetNanos = playbackStartNanos + Math.max(0L, frameTimestampMicros - playbackStartMicros) * 1000L;
-        long sleepNanos = targetNanos - System.nanoTime();
-        if (sleepNanos <= 0L) {
-            return;
-        }
-
-        long sleepMillis = sleepNanos / 1_000_000L;
-        int extraNanos = (int) (sleepNanos % 1_000_000L);
-        Thread.sleep(sleepMillis, extraNanos);
     }
 
     private ResolvedVideoSource resolveVideoSource(String rawSource) {
@@ -527,54 +510,67 @@ public class GuiVideoPlayer extends GuiScreen {
         return null;
     }
 
-    private volatile Thread cacheDownloadThread;
-
-    private void startCacheDownload(String url, String referer) {
+    private String downloadToCache(String url, String referer) {
         File cacheDir = getVideoCacheDir();
-        String fileName = getCacheFileName(url);
-        File targetFile = new File(cacheDir, fileName);
-        String tmpName = sha256(url) + ".tmp" + getUrlExtension(url);
-        File tmpFile = new File(cacheDir, tmpName);
+        File targetFile = new File(cacheDir, getCacheFileName(url));
+        File tmpFile = new File(cacheDir, sha256(url) + ".tmp" + getUrlExtension(url));
 
-        cacheDownloadThread = new Thread(() -> {
-            HttpURLConnection conn = null;
-            try {
-                conn = openHttpConnection(url, referer);
-                int status = conn.getResponseCode();
-                if (status != 200) {
-                    LaPluma.getLogger().log(Level.WARNING, "[Video] Cache download failed, status=" + status);
-                    return;
-                }
-
-                try (InputStream in = conn.getInputStream();
-                     FileOutputStream out = new FileOutputStream(tmpFile)) {
-                    byte[] buf = new byte[65536];
-                    int read;
-                    while ((read = in.read(buf)) != -1) {
-                        out.write(buf, 0, read);
-                    }
-                }
-
-                if (tmpFile.length() > 0) {
-                    if (tmpFile.renameTo(targetFile)) {
-                        LaPluma.getLogger().log(Level.INFO, "[Video] Cached to: " + targetFile.getAbsolutePath());
-                    }
-                } else {
-                    tmpFile.delete();
-                }
-            } catch (IOException e) {
-                LaPluma.getLogger().log(Level.WARNING, "[Video] Cache download error", e);
-                tmpFile.delete();
-            } finally {
-                if (conn != null) conn.disconnect();
+        HttpURLConnection conn = null;
+        try {
+            conn = openHttpConnection(url, referer);
+            int status = conn.getResponseCode();
+            if (status != 200) {
+                LaPluma.getLogger().log(Level.WARNING, "[Video] Download failed, status=" + status);
+                return null;
             }
-        }, "LaPluma-CacheDownload");
-        cacheDownloadThread.setDaemon(true);
-        cacheDownloadThread.start();
+
+            long contentLength = conn.getContentLengthLong();
+            try (InputStream in = conn.getInputStream();
+                 FileOutputStream out = new FileOutputStream(tmpFile)) {
+                byte[] buf = new byte[65536];
+                int read;
+                long downloaded = 0;
+                while ((read = in.read(buf)) != -1 && !finished.get()) {
+                    out.write(buf, 0, read);
+                    downloaded += read;
+                    if (contentLength > 0) {
+                        int percent = (int)(downloaded * 100 / contentLength);
+                        statusText.set("视频下载中... " + percent + "%");
+                    } else {
+                        statusText.set("视频下载中... " + (downloaded / 1024) + "KB");
+                    }
+                }
+            }
+
+            if (finished.get()) {
+                tmpFile.delete();
+                return null;
+            }
+
+            if (tmpFile.length() > 0 && tmpFile.renameTo(targetFile)) {
+                LaPluma.getLogger().log(Level.INFO, "[Video] Cached: " + targetFile.getAbsolutePath());
+                return targetFile.getAbsolutePath();
+            }
+            tmpFile.delete();
+        } catch (IOException e) {
+            LaPluma.getLogger().log(Level.WARNING, "[Video] Download error", e);
+            tmpFile.delete();
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+        return null;
+    }
+
+    private void writeAudioBytes(byte[] data, int offset, int length) {
+        if (audioPreBuffer != null) {
+            audioPreBuffer.write(data, offset, length);
+        } else if (audioPlayer != null && audioPlayer.isOpen()) {
+            audioPlayer.write(data, offset, length);
+        }
     }
 
     private void writeAudioFrame(Frame frame, int audioChannels) {
-        if (frame.samples == null || frame.samples.length == 0 || audioPlayer == null || !audioPlayer.isOpen()) {
+        if (frame.samples == null || frame.samples.length == 0) {
             return;
         }
 
@@ -615,7 +611,7 @@ public class GuiVideoPlayer extends GuiScreen {
                 bytes[index++] = (byte) ((val >>> 8) & 0xFF);
             }
         }
-        audioPlayer.write(bytes, 0, index);
+        writeAudioBytes(bytes, 0, index);
     }
 
     private void writeFloatBuffers(Frame frame, int audioChannels) {
@@ -647,7 +643,7 @@ public class GuiVideoPlayer extends GuiScreen {
                 bytes[index++] = (byte) ((val >>> 8) & 0xFF);
             }
         }
-        audioPlayer.write(bytes, 0, index);
+        writeAudioBytes(bytes, 0, index);
     }
 
     private void writePackedShortBuffer(ShortBuffer buffer) {
@@ -662,7 +658,7 @@ public class GuiVideoPlayer extends GuiScreen {
             bytes[i * 2] = (byte) (val & 0xFF);
             bytes[i * 2 + 1] = (byte) ((val >>> 8) & 0xFF);
         }
-        audioPlayer.write(bytes, 0, bytes.length);
+        writeAudioBytes(bytes, 0, bytes.length);
     }
 
     private void writePackedFloatBuffer(FloatBuffer buffer) {
@@ -677,7 +673,7 @@ public class GuiVideoPlayer extends GuiScreen {
             bytes[i * 2] = (byte) (val & 0xFF);
             bytes[i * 2 + 1] = (byte) ((val >>> 8) & 0xFF);
         }
-        audioPlayer.write(bytes, 0, bytes.length);
+        writeAudioBytes(bytes, 0, bytes.length);
     }
 
     private short floatToPcm16(float value) {
@@ -772,9 +768,15 @@ public class GuiVideoPlayer extends GuiScreen {
     }
 
     private void uploadReadyFrames() {
+        if (playbackStartNanos < 0) return;
+        long elapsedMicros = (System.nanoTime() - playbackStartNanos) / 1000L;
         TimedVideoFrame frameToUpload = null;
         synchronized (pendingFrames) {
             while (!pendingFrames.isEmpty()) {
+                TimedVideoFrame next = pendingFrames.peekFirst();
+                if (next.timestampMicros > elapsedMicros) {
+                    break;
+                }
                 frameToUpload = pendingFrames.removeFirst();
             }
         }
