@@ -19,11 +19,11 @@ import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 
 import java.awt.image.BufferedImage;
-import java.io.BufferedReader;
-import java.io.IOException;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.nio.FloatBuffer;
@@ -43,8 +43,8 @@ public class GuiVideoPlayer extends GuiScreen {
     private static final int HTTP_READ_TIMEOUT_MS = 15_000;
     private static final int MAX_HTTP_REDIRECTS = 8;
     private static final int MAX_HTML_BYTES = 32_768;
-    private static final int MAX_PENDING_VIDEO_FRAMES = 3;
-    private static final int STARTUP_PREBUFFER_VIDEO_FRAMES = 3;
+    private static final int MAX_PENDING_VIDEO_FRAMES = 30;
+    private static final int STARTUP_PREBUFFER_VIDEO_FRAMES = 5;
     private static final long STARTUP_PREBUFFER_AUDIO_MICROS = 100_000L;
     private static final long VIDEO_AUDIO_LEAD_MICROS = 20_000L;
     private static final Pattern TARGET_INPUT_PATTERN = Pattern.compile(
@@ -94,7 +94,7 @@ public class GuiVideoPlayer extends GuiScreen {
     private final AtomicBoolean paused = new AtomicBoolean(false);
     private final AtomicBoolean finished = new AtomicBoolean(false);
     private final AtomicBoolean failed = new AtomicBoolean(false);
-    private final AtomicReference<String> statusText = new AtomicReference<>("Loading...");
+    private final AtomicReference<String> statusText = new AtomicReference<>("视频加载中...");
     private final Deque<TimedVideoFrame> pendingFrames = new ArrayDeque<>();
 
     private volatile long durationMicros = 0;
@@ -102,6 +102,11 @@ public class GuiVideoPlayer extends GuiScreen {
     private volatile boolean restoreScreenOnClose = true;
     private volatile boolean notifyServerOnClose = true;
     private volatile boolean audioClockActive = false;
+    private volatile int uploadedFrameCount = 0;
+    private int lastCheckedFrameCount = 0;
+    private long stallCheckStartTime = 0;
+    private static final long STALL_DETECT_MS = 3000;
+    private volatile boolean restartRequested = false;
 
     private Thread decoderThread;
     private VideoAudioPlayer audioPlayer;
@@ -135,7 +140,7 @@ public class GuiVideoPlayer extends GuiScreen {
         finished.set(false);
         playing.set(false);
         failed.set(false);
-        statusText.set("Loading...");
+        statusText.set("视频加载中...");
         synchronized (pendingFrames) {
             pendingFrames.clear();
         }
@@ -148,13 +153,25 @@ public class GuiVideoPlayer extends GuiScreen {
                 NativeExtractor.ensureExtracted();
                 converter = new Java2DFrameConverter();
                 ResolvedVideoSource resolvedSource = resolveVideoSource(source);
-                grabber = new FFmpegFrameGrabber(resolvedSource.playbackUrl);
+                String grabberSource = resolvedSource.playbackUrl;
+                boolean needsCacheAfterPlay = false;
+                if (isHttpSource(grabberSource)) {
+                    String cached = getCachedVideoPath(grabberSource);
+                    if (cached != null) {
+                        grabberSource = cached;
+                    } else {
+                        needsCacheAfterPlay = true;
+                    }
+                }
+                grabber = new FFmpegFrameGrabber(grabberSource);
                 grabber.setImageMode(FFmpegFrameGrabber.ImageMode.COLOR);
-                configureGrabber(grabber, resolvedSource);
+                if (isHttpSource(grabberSource)) {
+                    configureGrabber(grabber, resolvedSource);
+                }
                 grabber.start();
 
                 durationMicros = Math.max(0, grabber.getLengthInTime());
-                statusText.set("Buffering...");
+                statusText.set("视频加载中...");
 
                 LaPluma.getLogger().log(Level.INFO, "[Video] Started: " + resolvedSource.playbackUrl
                         + " (" + grabber.getImageWidth() + "x" + grabber.getImageHeight()
@@ -189,7 +206,7 @@ public class GuiVideoPlayer extends GuiScreen {
                 if (!audioOpened) {
                     playbackStarted = true;
                     playing.set(true);
-                    statusText.set("Playing");
+                    statusText.set("视频播放中");
                 }
 
                 long playbackStartMicros = -1L;
@@ -198,6 +215,33 @@ public class GuiVideoPlayer extends GuiScreen {
                 int videoFrames = 0;
                 int audioFrames = 0;
                 while (!finished.get()) {
+                    if (restartRequested) {
+                        restartRequested = false;
+                        long seekTarget = getPlaybackClockMicros();
+                        LaPluma.getLogger().log(Level.INFO, "[Video] Restarting from " + seekTarget + " micros");
+                        if (audioPlayer != null) {
+                            audioPlayer.close();
+                        }
+                        synchronized (pendingFrames) {
+                            pendingFrames.clear();
+                        }
+                        grabber.setTimestamp(seekTarget);
+                        audioPlayer = new VideoAudioPlayer();
+                        if (audioOpened) {
+                            audioOpened = audioPlayer.open(outputSampleRate, outputAudioChannels, 16);
+                        }
+                        playbackStarted = false;
+                        playing.set(false);
+                        audioClockActive = false;
+                        playbackStartMicros = -1L;
+                        playbackStartNanos = -1L;
+                        uploadedFrameCount = 0;
+                        lastCheckedFrameCount = 0;
+                        stallCheckStartTime = 0;
+                        statusText.set("视频缓冲中...");
+                        continue;
+                    }
+
                     if (paused.get()) {
                         Thread.sleep(50L);
                         playbackStartMicros = -1L;
@@ -224,9 +268,10 @@ public class GuiVideoPlayer extends GuiScreen {
                         }
                         BufferedImage img = converter.convert(frame);
                         if (img != null) {
-                            BufferedImage argb = new BufferedImage(img.getWidth(), img.getHeight(), BufferedImage.TYPE_INT_ARGB);
-                            argb.getGraphics().drawImage(img, 0, 0, null);
-                            enqueueVideoFrame(frameTimestampMicros, argb);
+                            int w = img.getWidth();
+                            int h = img.getHeight();
+                            int[] pixels = img.getRGB(0, 0, w, h, null, 0, w);
+                            enqueueVideoFrame(frameTimestampMicros, w, h, pixels);
                         }
                     }
 
@@ -244,7 +289,7 @@ public class GuiVideoPlayer extends GuiScreen {
                         audioClockActive = audioOpened;
                         playbackStarted = true;
                         playing.set(true);
-                        statusText.set("Playing");
+                        statusText.set("视频播放中");
                         LaPluma.getLogger().log(Level.INFO, "[Video] Playback started after prebuffer: videoFrames="
                                 + getPendingFrameCount() + ", audioBufferedMicros=" + audioPlayer.getBufferedMicros());
                     }
@@ -258,6 +303,9 @@ public class GuiVideoPlayer extends GuiScreen {
                 currentTimeMicros = Math.max(currentTimeMicros, durationMicros);
                 statusText.set("Finished");
                 LaPluma.getLogger().log(Level.INFO, "[Video] Decode loop ended, videoFrames=" + videoFrames + " audioFrames=" + audioFrames);
+                if (needsCacheAfterPlay && !failed.get()) {
+                    startCacheDownload(resolvedSource.playbackUrl, resolvedSource.referer);
+                }
             } catch (Throwable e) {
                 failed.set(true);
                 statusText.set("Error: " + e.getMessage());
@@ -299,9 +347,9 @@ public class GuiVideoPlayer extends GuiScreen {
                 && audioPlayer.getBufferedMicros() >= STARTUP_PREBUFFER_AUDIO_MICROS;
     }
 
-    private void enqueueVideoFrame(long timestampMicros, BufferedImage image) {
+    private void enqueueVideoFrame(long timestampMicros, int width, int height, int[] pixels) {
         synchronized (pendingFrames) {
-            pendingFrames.addLast(new TimedVideoFrame(timestampMicros, image));
+            pendingFrames.addLast(new TimedVideoFrame(timestampMicros, width, height, pixels));
             while (pendingFrames.size() > MAX_PENDING_VIDEO_FRAMES) {
                 pendingFrames.removeFirst();
             }
@@ -528,6 +576,96 @@ public class GuiVideoPlayer extends GuiScreen {
         return rawSource == null ? "" : rawSource.trim();
     }
 
+    private static File getVideoCacheDir() {
+        File dir = new File(Minecraft.getMinecraft().gameDir, "lapluma" + File.separator + "cache" + File.separator + "videos");
+        dir.mkdirs();
+        return dir;
+    }
+
+    private static String sha256(String input) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hash) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(input.hashCode());
+        }
+    }
+
+    private static String getUrlExtension(String url) {
+        try {
+            String path = new URL(url).getPath();
+            int lastDot = path.lastIndexOf('.');
+            int lastSlash = path.lastIndexOf('/');
+            if (lastDot > lastSlash && lastDot < path.length() - 1) {
+                String ext = path.substring(lastDot);
+                if (ext.length() <= 6) return ext;
+            }
+        } catch (Exception ignored) {}
+        return ".mp4";
+    }
+
+    private String getCacheFileName(String url) {
+        return sha256(url) + getUrlExtension(url);
+    }
+
+    private String getCachedVideoPath(String url) {
+        File cached = new File(getVideoCacheDir(), getCacheFileName(url));
+        if (cached.isFile() && cached.length() > 0) {
+            LaPluma.getLogger().log(Level.INFO, "[Video] Cache hit: " + cached.getAbsolutePath());
+            return cached.getAbsolutePath();
+        }
+        return null;
+    }
+
+    private volatile Thread cacheDownloadThread;
+
+    private void startCacheDownload(String url, String referer) {
+        File cacheDir = getVideoCacheDir();
+        String fileName = getCacheFileName(url);
+        File targetFile = new File(cacheDir, fileName);
+        String tmpName = sha256(url) + ".tmp" + getUrlExtension(url);
+        File tmpFile = new File(cacheDir, tmpName);
+
+        cacheDownloadThread = new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                conn = openHttpConnection(url, referer);
+                int status = conn.getResponseCode();
+                if (status != 200) {
+                    LaPluma.getLogger().log(Level.WARNING, "[Video] Cache download failed, status=" + status);
+                    return;
+                }
+
+                try (InputStream in = conn.getInputStream();
+                     FileOutputStream out = new FileOutputStream(tmpFile)) {
+                    byte[] buf = new byte[65536];
+                    int read;
+                    while ((read = in.read(buf)) != -1) {
+                        out.write(buf, 0, read);
+                    }
+                }
+
+                if (tmpFile.length() > 0) {
+                    if (tmpFile.renameTo(targetFile)) {
+                        LaPluma.getLogger().log(Level.INFO, "[Video] Cached to: " + targetFile.getAbsolutePath());
+                    }
+                } else {
+                    tmpFile.delete();
+                }
+            } catch (IOException e) {
+                LaPluma.getLogger().log(Level.WARNING, "[Video] Cache download error", e);
+                tmpFile.delete();
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }, "LaPluma-CacheDownload");
+        cacheDownloadThread.setDaemon(true);
+        cacheDownloadThread.start();
+    }
+
     private void writeAudioFrame(Frame frame, int audioChannels) {
         if (frame.samples == null || frame.samples.length == 0 || audioPlayer == null || !audioPlayer.isOpen()) {
             return;
@@ -728,19 +866,35 @@ public class GuiVideoPlayer extends GuiScreen {
 
     private void uploadReadyFrames() {
         long playbackMicros = getPlaybackClockMicros();
-        BufferedImage frameToUpload = null;
+        TimedVideoFrame frameToUpload = null;
         synchronized (pendingFrames) {
             while (!pendingFrames.isEmpty()) {
                 TimedVideoFrame nextFrame = pendingFrames.peekFirst();
                 if (audioClockActive && nextFrame.timestampMicros > playbackMicros + VIDEO_AUDIO_LEAD_MICROS) {
                     break;
                 }
-                frameToUpload = pendingFrames.removeFirst().image;
+                frameToUpload = pendingFrames.removeFirst();
             }
         }
 
         if (frameToUpload != null) {
             uploadFrame(frameToUpload);
+            uploadedFrameCount++;
+        }
+
+        if (playing.get() && !finished.get() && audioClockActive) {
+            if (uploadedFrameCount == lastCheckedFrameCount) {
+                if (stallCheckStartTime == 0) {
+                    stallCheckStartTime = System.currentTimeMillis();
+                } else if (System.currentTimeMillis() - stallCheckStartTime > STALL_DETECT_MS) {
+                    LaPluma.getLogger().log(Level.INFO, "[Video] Stall detected, requesting restart");
+                    restartRequested = true;
+                    stallCheckStartTime = 0;
+                }
+            } else {
+                lastCheckedFrameCount = uploadedFrameCount;
+                stallCheckStartTime = 0;
+            }
         }
     }
 
@@ -753,20 +907,20 @@ public class GuiVideoPlayer extends GuiScreen {
         return currentTimeMicros;
     }
 
-    private void uploadFrame(BufferedImage frame) {
+    private void uploadFrame(TimedVideoFrame frame) {
         TextureManager texManager = Minecraft.getMinecraft().getTextureManager();
-        if (texWidth != frame.getWidth() || texHeight != frame.getHeight() || videoTexture == null) {
+        if (texWidth != frame.width || texHeight != frame.height || videoTexture == null) {
             if (videoTextureLocation != null) {
                 texManager.deleteTexture(videoTextureLocation);
             }
-            texWidth = frame.getWidth();
-            texHeight = frame.getHeight();
+            texWidth = frame.width;
+            texHeight = frame.height;
             videoTexture = new DynamicTexture(texWidth, texHeight);
             videoTextureLocation = texManager.getDynamicTextureLocation("lapluma_video", videoTexture);
         }
 
         int[] texData = videoTexture.getTextureData();
-        frame.getRGB(0, 0, texWidth, texHeight, texData, 0, texWidth);
+        System.arraycopy(frame.pixels, 0, texData, 0, Math.min(frame.pixels.length, texData.length));
         videoTexture.updateDynamicTexture();
     }
 
@@ -840,11 +994,15 @@ public class GuiVideoPlayer extends GuiScreen {
 
     private static class TimedVideoFrame {
         private final long timestampMicros;
-        private final BufferedImage image;
+        private final int width;
+        private final int height;
+        private final int[] pixels;
 
-        private TimedVideoFrame(long timestampMicros, BufferedImage image) {
+        private TimedVideoFrame(long timestampMicros, int width, int height, int[] pixels) {
             this.timestampMicros = timestampMicros;
-            this.image = image;
+            this.width = width;
+            this.height = height;
+            this.pixels = pixels;
         }
     }
 }

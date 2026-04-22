@@ -15,6 +15,7 @@ import net.minecraft.item.Item;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundEvent;
 import net.minecraftforge.client.ClientCommandHandler;
+import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.client.event.sound.SoundSetupEvent;
 import net.minecraftforge.event.RegistryEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -249,6 +250,13 @@ public class LaPluma {
      */
     @Mod.EventBusSubscriber
     public static class ObjectRegistryHandler {
+
+        @SubscribeEvent
+        public static void onRenderOverlay(RenderGameOverlayEvent.Pre event) {
+            if (Minecraft.getMinecraft().currentScreen instanceof GuiDialog) {
+                event.setCanceled(true);
+            }
+        }
 
         @SubscribeEvent
         public static void onSoundSetup(SoundSetupEvent event) {
