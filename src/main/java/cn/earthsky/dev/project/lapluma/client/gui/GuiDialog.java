@@ -20,7 +20,11 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
+import net.minecraft.client.renderer.BufferBuilder;
 import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
+import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.client.renderer.entity.RenderManager;
@@ -164,10 +168,12 @@ public class GuiDialog extends GuiScreen {
     private List<GuiSmallButton> smallButtonList = new ArrayList<>();
     @Getter @Setter private boolean centerText = false;
     private float textProgress = 0f;
-    private static final float TEXT_SPEED = 0.8f;
+    private static final float TEXT_SPEED = 5.0f;
+    private Framebuffer charFbo;
+    private static final int FBO_SIZE = 64;
     private boolean autoPlay = true;
     private int autoPlayWaitTick = 0;
-    private static final int AUTO_PLAY_DELAY = 60;
+    private static final int AUTO_PLAY_DELAY = 40;
 
     public void setBackground(final String bg){
         if(hasFX()) {
@@ -492,10 +498,19 @@ public class GuiDialog extends GuiScreen {
         }
         autoPlayWaitTick = 0;
         textProgress += TEXT_SPEED;
-        int charCount = Math.min((int) textProgress, fullText.length());
-        text = fullText.substring(0, charCount);
-        if (charCount >= fullText.length()) {
+        int totalWidth = fontRenderer.getStringWidth(fullText);
+        if (textProgress >= totalWidth) {
             text = fullText;
+        } else {
+            int px = 0;
+            int count = 0;
+            for (int i = 0; i < fullText.length(); i++) {
+                int cw = fontRenderer.getCharWidth(fullText.charAt(i));
+                if (px + cw > textProgress) break;
+                px += cw;
+                count++;
+            }
+            text = fullText.substring(0, count);
         }
 
     }
@@ -513,56 +528,112 @@ public class GuiDialog extends GuiScreen {
     private void drawCenteredSplitString(int trimWidth, int top, double textScale, int color, float partialTicks) {
         if(fullText == null || fullText.isEmpty()) return;
 
-        float renderProgress = Math.min(textProgress + TEXT_SPEED * partialTicks, fullText.length());
-        int renderChars = (int) renderProgress;
-        float renderFraction = renderProgress - renderChars;
+        java.util.List<String> fullLines = fontRenderer.listFormattedStringToWidth(fullText, trimWidth);
+        int totalPx = 0;
+        for (String line : fullLines) totalPx += fontRenderer.getStringWidth(line);
+        float renderPx = Math.min(textProgress + TEXT_SPEED * partialTicks, totalPx);
 
         GL11.glPushMatrix();
         GL11.glScaled(textScale, textScale, 1);
 
-        java.util.List<String> fullLines = fontRenderer.listFormattedStringToWidth(fullText, trimWidth);
         int y = (int) ((top + 22) / textScale);
         double centerX = this.width / 2.0 / textScale;
 
-        net.minecraft.client.gui.ScaledResolution sr = new net.minecraft.client.gui.ScaledResolution(Minecraft.getMinecraft());
-        int scaleFactor = sr.getScaleFactor();
-        int displayH = Minecraft.getMinecraft().displayHeight;
-
-        int charsRemaining = renderChars;
-        boolean maskDone = false;
-
+        float consumed = 0;
         for (String fullLine : fullLines) {
-            if (charsRemaining <= 0 && maskDone) break;
-            int fullLineWidth = fontRenderer.getStringWidth(fullLine);
-            int lineX = (int) (centerX - fullLineWidth / 2.0);
-            int showCount = Math.min(Math.max(charsRemaining, 0), fullLine.length());
+            int lineW = fontRenderer.getStringWidth(fullLine);
+            int lineX = (int) (centerX - lineW / 2.0);
+            float lineRevealed = renderPx - consumed;
 
-            if (showCount >= fullLine.length()) {
+            if (lineRevealed >= lineW) {
                 fontRenderer.drawStringWithShadow(fullLine, lineX, y, color);
-            } else if (!maskDone && renderChars < fullText.length()) {
-                maskDone = true;
-                String revealed = showCount > 0 ? fullLine.substring(0, showCount) : "";
-                int revealedW = fontRenderer.getStringWidth(revealed);
-                float extra = showCount < fullLine.length()
-                        ? renderFraction * fontRenderer.getCharWidth(fullLine.charAt(showCount)) : 0;
-                int maskW = (int) Math.ceil(revealedW + extra) + 2;
-
-                int fbX = (int)(lineX * textScale * scaleFactor);
-                int fbW = (int) Math.ceil(maskW * textScale * scaleFactor);
-                int fbH = (int) Math.ceil((fontRenderer.FONT_HEIGHT + 1) * textScale * scaleFactor);
-                int fbY = displayH - (int)((y + fontRenderer.FONT_HEIGHT + 1) * textScale * scaleFactor);
-
-                GL11.glEnable(GL11.GL_SCISSOR_TEST);
-                GL11.glScissor(Math.max(0, fbX), Math.max(0, fbY), Math.max(1, fbW), Math.max(1, fbH));
-                fontRenderer.drawStringWithShadow(fullLine, lineX, y, color);
-                GL11.glDisable(GL11.GL_SCISSOR_TEST);
+            } else if (lineRevealed > 0) {
+                int px = 0;
+                int solidEnd = 0;
+                for (int i = 0; i < fullLine.length(); i++) {
+                    int cw = fontRenderer.getCharWidth(fullLine.charAt(i));
+                    if (px + cw <= lineRevealed) { px += cw; solidEnd = i + 1; }
+                    else break;
+                }
+                if (solidEnd > 0) {
+                    fontRenderer.drawStringWithShadow(fullLine.substring(0, solidEnd), lineX, y, color);
+                }
+                if (solidEnd < fullLine.length()) {
+                    int charX = lineX + (solidEnd > 0 ? fontRenderer.getStringWidth(fullLine.substring(0, solidEnd)) : 0);
+                    float alpha = (lineRevealed - px) / (float) fontRenderer.getCharWidth(fullLine.charAt(solidEnd));
+                    alpha = Math.max(0f, Math.min(1f, alpha));
+                    drawFadingChar(String.valueOf(fullLine.charAt(solidEnd)), charX, y, color, alpha, textScale);
+                }
+            } else {
+                break;
             }
 
-            charsRemaining -= showCount;
+            consumed += lineW;
             y += fontRenderer.FONT_HEIGHT;
         }
 
         GL11.glPopMatrix();
+    }
+
+    private void drawFadingChar(String ch, int x, int y, int color, float alpha, double currentScale) {
+        Minecraft mc = Minecraft.getMinecraft();
+        int scaleFactor = mc.gameSettings.guiScale == 0
+                ? Math.max(1, (int)(Math.min(mc.displayWidth, mc.displayHeight) / 320.0))
+                : mc.gameSettings.guiScale;
+        int fbW = (int)(FBO_SIZE * currentScale * scaleFactor);
+        int fbH = (int)(FBO_SIZE * currentScale * scaleFactor);
+        if (fbW <= 0 || fbH <= 0) return;
+
+        if (charFbo == null || charFbo.framebufferWidth != fbW || charFbo.framebufferHeight != fbH) {
+            if (charFbo != null) charFbo.deleteFramebuffer();
+            charFbo = new Framebuffer(fbW, fbH, false);
+        }
+
+        GL11.glPopMatrix();
+
+        charFbo.framebufferClear();
+        charFbo.bindFramebuffer(true);
+        GlStateManager.matrixMode(GL11.GL_PROJECTION);
+        GlStateManager.pushMatrix();
+        GlStateManager.loadIdentity();
+        GlStateManager.ortho(0, FBO_SIZE * currentScale, FBO_SIZE * currentScale, 0, 1000, 3000);
+        GlStateManager.matrixMode(GL11.GL_MODELVIEW);
+        GlStateManager.pushMatrix();
+        GlStateManager.loadIdentity();
+        GlStateManager.translate(0, 0, -2000);
+
+        GlStateManager.pushMatrix();
+        GL11.glScaled(currentScale, currentScale, 1);
+        fontRenderer.drawStringWithShadow(ch, 1, 1, color);
+        GlStateManager.popMatrix();
+
+        GlStateManager.popMatrix();
+        GlStateManager.matrixMode(GL11.GL_PROJECTION);
+        GlStateManager.popMatrix();
+        GlStateManager.matrixMode(GL11.GL_MODELVIEW);
+
+        mc.getFramebuffer().bindFramebuffer(true);
+
+        GL11.glPushMatrix();
+        GL11.glScaled(currentScale, currentScale, 1);
+
+        GlStateManager.enableBlend();
+        GlStateManager.tryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
+        GlStateManager.color(1f, 1f, 1f, alpha);
+        charFbo.bindFramebufferTexture();
+
+        int drawW = (int)(FBO_SIZE);
+        int drawH = (int)(FBO_SIZE);
+        Tessellator tess = Tessellator.getInstance();
+        BufferBuilder buf = tess.getBuffer();
+        buf.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_TEX);
+        buf.pos(x - 1, y - 1 + drawH, 0).tex(0, 0).endVertex();
+        buf.pos(x - 1 + drawW, y - 1 + drawH, 0).tex(1, 0).endVertex();
+        buf.pos(x - 1 + drawW, y - 1, 0).tex(1, 1).endVertex();
+        buf.pos(x - 1, y - 1, 0).tex(0, 1).endVertex();
+        tess.draw();
+
+        GlStateManager.color(1f, 1f, 1f, 1f);
     }
 
     public double getHeightScale(){
@@ -638,6 +709,7 @@ public class GuiDialog extends GuiScreen {
                         nextPrompt();
                     } else {
                         text = fullText;
+                        textProgress = Float.MAX_VALUE;
                     }
                 }else if(centerText && Math.abs(mouseY-height/2) < 60){
                     if (autoPlay) { autoPlay = false; autoPlayWaitTick = 0; }
@@ -645,6 +717,7 @@ public class GuiDialog extends GuiScreen {
                         nextPrompt();
                     } else {
                         text = fullText;
+                        textProgress = Float.MAX_VALUE;
                     }
                 }else {
                     for (int i = 0; i < this.smallButtonList.size(); ++i) {
@@ -716,6 +789,7 @@ public class GuiDialog extends GuiScreen {
     @Override
     public void onGuiClosed() {
         super.onGuiClosed();
+        if (charFbo != null) { charFbo.deleteFramebuffer(); charFbo = null; }
         ProxyPacketHandler.sendPacket(2,trySkipped ? 1 : 0, structure.getName());
     }
 
@@ -863,33 +937,31 @@ public class GuiDialog extends GuiScreen {
                 } else {
                     int centerColor = (alphaInt << 24) | 0xFFFFFF;
                     double cScale = Math.max(getHeightScale() * 2, 1);
-                    float renderProgress = Math.min(textProgress + TEXT_SPEED * partialTicks, fullText.length());
-                    int renderChars = (int) renderProgress;
-                    float renderFraction = renderProgress - renderChars;
-                    if (renderChars < fullText.length()) {
+                    int totalW = fontRenderer.getStringWidth(fullText);
+                    float renderPx = Math.min(textProgress + TEXT_SPEED * partialTicks, totalW);
+                    if (renderPx < totalW) {
                         GL11.glPushMatrix();
                         GL11.glScaled(cScale, cScale, 1.0F);
                         int sx = (int)(this.width / 2f / cScale);
                         int sy = (int)((this.height / 2f + animYOffset) / cScale - fontRenderer.FONT_HEIGHT);
-                        int fullW = fontRenderer.getStringWidth(fullText);
-                        int startX = sx - fullW / 2;
-                        String revealedPart = fullText.substring(0, renderChars);
-                        int revealedW = fontRenderer.getStringWidth(revealedPart);
-                        float extra = renderFraction * fontRenderer.getCharWidth(fullText.charAt(renderChars));
-                        int maskW = (int) Math.ceil(revealedW + extra) + 2;
+                        int startX = sx - totalW / 2;
 
-                        net.minecraft.client.gui.ScaledResolution sr2 = new net.minecraft.client.gui.ScaledResolution(mc);
-                        int sf = sr2.getScaleFactor();
-                        int dh = mc.displayHeight;
-                        int fbX = (int)(startX * cScale * sf);
-                        int fbW = (int) Math.ceil(maskW * cScale * sf);
-                        int fbH = (int) Math.ceil((fontRenderer.FONT_HEIGHT + 1) * cScale * sf);
-                        int fbY = dh - (int)((sy + fontRenderer.FONT_HEIGHT + 1) * cScale * sf);
-
-                        GL11.glEnable(GL11.GL_SCISSOR_TEST);
-                        GL11.glScissor(Math.max(0, fbX), Math.max(0, fbY), Math.max(1, fbW), Math.max(1, fbH));
-                        fontRenderer.drawStringWithShadow(fullText, startX, sy, centerColor);
-                        GL11.glDisable(GL11.GL_SCISSOR_TEST);
+                        int px = 0;
+                        int solidEnd = 0;
+                        for (int i = 0; i < fullText.length(); i++) {
+                            int cw = fontRenderer.getCharWidth(fullText.charAt(i));
+                            if (px + cw <= renderPx) { px += cw; solidEnd = i + 1; }
+                            else break;
+                        }
+                        if (solidEnd > 0) {
+                            fontRenderer.drawStringWithShadow(fullText.substring(0, solidEnd), startX, sy, centerColor);
+                        }
+                        if (solidEnd < fullText.length()) {
+                            int charX = startX + (solidEnd > 0 ? fontRenderer.getStringWidth(fullText.substring(0, solidEnd)) : 0);
+                            float alpha = (renderPx - px) / (float) fontRenderer.getCharWidth(fullText.charAt(solidEnd));
+                            alpha = Math.max(0f, Math.min(1f, alpha));
+                            drawFadingChar(String.valueOf(fullText.charAt(solidEnd)), charX, sy, centerColor, alpha, cScale);
+                        }
                         GL11.glPopMatrix();
                     } else {
                         drawCenteredLargeString(text, this.width / 2f, this.height / 2f + animYOffset, cScale, centerColor);
