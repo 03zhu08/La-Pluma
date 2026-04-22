@@ -20,7 +20,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiButton;
 import net.minecraft.client.gui.GuiScreen;
-import net.minecraft.client.gui.inventory.GuiInventory;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.RenderHelper;
@@ -185,6 +184,23 @@ public class GuiDialog extends GuiScreen {
                 showLog = false;
             }
         }
+
+        if (!selectionButtonList.isEmpty() && typedChar >= '1' && typedChar <= '9') {
+            int index = typedChar - '1';
+            if (index < selectionButtonList.size()) {
+                GuiSelectionButton btn = selectionButtonList.get(index);
+                playPressedSound();
+                ProxyPacketHandler.sendPacket(3, cursor * 10 + index, structure.getName());
+                btn.getCallback().accept(this);
+                logSlider.addLog("  §e[" + btn.displayString + "]");
+                selectionButtonList.clear();
+                if (!hasContinueStructure) {
+                    nextPrompt();
+                } else {
+                    hasContinueStructure = false;
+                }
+            }
+        }
     }
 
     public void clearCharacter(){
@@ -249,25 +265,41 @@ public class GuiDialog extends GuiScreen {
             EntityLivingBase living = (EntityLivingBase) entity;
             float lookX = posX - mouseX;
             float lookY = posY - scale - mouseY;
-            GuiInventory.drawEntityOnScreen(posX, posY, (int) scale, lookX, lookY, living);
-        } else {
+
+            GlStateManager.disableBlend();
+            GlStateManager.enableDepth();
+            GlStateManager.depthMask(true);
+            GlStateManager.color(1.0f, 1.0f, 1.0f, 1.0f);
             GlStateManager.enableColorMaterial();
             GlStateManager.pushMatrix();
             GlStateManager.translate((float) posX, (float) posY, 50.0F);
-            GlStateManager.scale(-scale, scale, scale);
+            GlStateManager.scale(-(float)(int) scale, (float)(int) scale, (float)(int) scale);
             GlStateManager.rotate(180.0F, 0.0F, 0.0F, 1.0F);
+            float f = living.renderYawOffset;
+            float f1 = living.rotationYaw;
+            float f2 = living.rotationPitch;
+            float f3 = living.prevRotationYawHead;
+            float f4 = living.rotationYawHead;
             GlStateManager.rotate(135.0F, 0.0F, 1.0F, 0.0F);
             RenderHelper.enableStandardItemLighting();
             GlStateManager.rotate(-135.0F, 0.0F, 1.0F, 0.0F);
-            GlStateManager.rotate(0, 1.0F, 0.0F, 0.0F);
+            GlStateManager.rotate(-((float) Math.atan((double)(lookY / 40.0F))) * 20.0F, 1.0F, 0.0F, 0.0F);
+            living.renderYawOffset = (float) Math.atan((double)(lookX / 40.0F)) * 20.0F;
+            living.rotationYaw = (float) Math.atan((double)(lookX / 40.0F)) * 40.0F;
+            living.rotationPitch = -((float) Math.atan((double)(lookY / 40.0F))) * 20.0F;
+            living.rotationYawHead = living.rotationYaw;
+            living.prevRotationYawHead = living.rotationYaw;
+            GlStateManager.translate(0.0F, 0.0F, 0.0F);
             RenderManager rendermanager = Minecraft.getMinecraft().getRenderManager();
             rendermanager.setPlayerViewY(180.0F);
             rendermanager.setRenderShadow(false);
-            try {
-                rendermanager.renderEntity(entity, 0.0D, 0.0D, 0.0D, 0.0F, 1.0F, false);
-            } catch (Throwable ignored) {
-            }
+            rendermanager.renderEntity(living, 0.0D, 0.0D, 0.0D, 0.0F, 1.0F, false);
             rendermanager.setRenderShadow(true);
+            living.renderYawOffset = f;
+            living.rotationYaw = f1;
+            living.rotationPitch = f2;
+            living.prevRotationYawHead = f3;
+            living.rotationYawHead = f4;
             GlStateManager.popMatrix();
             RenderHelper.disableStandardItemLighting();
             GlStateManager.disableRescaleNormal();
@@ -481,35 +513,26 @@ public class GuiDialog extends GuiScreen {
     private void drawCenteredSplitString(String text, int trimWidth, int top, double textScale, int color) {
         if(text == null || text.isEmpty()) return;
 
-        float typingProgress = 1.0f;
-        if (fullText != null && !fullText.isEmpty()) {
-            typingProgress = (float) text.length() / fullText.length();
-        }
-        float revealFactor = Math.min(typingProgress * 1.5f, 1.0f);
-
         GL11.glPushMatrix();
         GL11.glScaled(textScale, textScale, 1);
-        java.util.List<String> lines = fontRenderer.listFormattedStringToWidth(text, trimWidth);
+
+        java.util.List<String> fullLines = fontRenderer.listFormattedStringToWidth(
+                fullText != null && !fullText.isEmpty() ? fullText : text, trimWidth);
         int y = (int) ((top + 22) / textScale);
         double centerX = this.width / 2.0 / textScale;
 
-        net.minecraft.client.gui.ScaledResolution sr = new net.minecraft.client.gui.ScaledResolution(Minecraft.getMinecraft());
-        int sf = sr.getScaleFactor();
-        int screenPixelWidth = this.width * sf;
-        int revealWidth = (int)(screenPixelWidth * revealFactor);
-        int clipLeft = Math.max((screenPixelWidth - revealWidth) / 2, 0);
-
-        GL11.glEnable(GL11.GL_SCISSOR_TEST);
-        GL11.glScissor(clipLeft, 0, revealWidth, this.height * sf);
-
-        for (String line : lines) {
-            int lineWidth = fontRenderer.getStringWidth(line);
-            int x = (int) (centerX - lineWidth / 2.0);
-            fontRenderer.drawStringWithShadow(line, x, y, color);
+        int charsRemaining = text.length();
+        for (String fullLine : fullLines) {
+            if (charsRemaining <= 0) break;
+            int fullLineWidth = fontRenderer.getStringWidth(fullLine);
+            int x = (int) (centerX - fullLineWidth / 2.0);
+            int showCount = Math.min(charsRemaining, fullLine.length());
+            String visiblePart = fullLine.substring(0, showCount);
+            fontRenderer.drawStringWithShadow(visiblePart, x, y, color);
+            charsRemaining -= showCount;
             y += fontRenderer.FONT_HEIGHT;
         }
 
-        GL11.glDisable(GL11.GL_SCISSOR_TEST);
         GL11.glPopMatrix();
     }
 
@@ -721,27 +744,26 @@ public class GuiDialog extends GuiScreen {
                     Entity entity = resolveEntity(character);
                     if (entity != null) {
                         float scale = 50 * character.getEntityScale() * (float) heightScaleFactor;
-                        if (hasFX()) {
-                            GL11.glColor4f(gAlpha, gAlpha, gAlpha, 1.0f);
-                        } else if (character.isDimmed()) {
-                            GL11.glColor4f(0.5f, 0.5f, 0.5f, 1.0f);
-                        }
                         float mx = character.isEntityFollowMouse() ? mouseX : charX;
                         float my = character.isEntityFollowMouse() ? mouseY : charY - scale;
+                        GlStateManager.color(1.0f, 1.0f, 1.0f, 1.0f);
                         drawEntityOnScreen(charX, charY, scale, mx, my, entity);
                     }
                 } else {
                     mc.getTextureManager().bindTexture(new ResourceLocation("lapluma", "avg/" + character.getIdentity() + ".png"));
                     GL11.glPushMatrix();
+                    GL11.glEnable(GL11.GL_BLEND);
+                    GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
                     GL11.glScaled(widthScaleFactor, heightScaleFactor, 1);
                     if (hasFX()) {
-                        GL11.glColor3f(gAlpha, gAlpha, gAlpha);
+                        GL11.glColor4f(gAlpha, gAlpha, gAlpha, 1.0f);
                     } else if (character.isDimmed()) {
-                        GL11.glColor3f(0.5f, 0.5f, 0.5f);
+                        GL11.glColor4f(0.5f, 0.5f, 0.5f, 1.0f);
                     } else {
-                        GL11.glColor3f(1.0f, 1.0f, 1.0f);
+                        GL11.glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
                     }
                     this.drawTexturedModalRect((int) ((this.width * (character.getPosition() / 100d) - 122) / (widthScaleFactor * 2)), (int) ((this.height / 4 - 60) / heightScaleFactor), 0, 0, 256, 256);
+                    GL11.glDisable(GL11.GL_BLEND);
                     GL11.glPopMatrix();
                 }
             }catch (Throwable throwable){

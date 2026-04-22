@@ -43,7 +43,6 @@ public class GuiVideoPlayer extends GuiScreen {
     private static final int MAX_HTTP_REDIRECTS = 8;
     private static final int MAX_HTML_BYTES = 32_768;
     private static final int MAX_PENDING_VIDEO_FRAMES = 30;
-    private static final int STARTUP_PREBUFFER_VIDEO_FRAMES = 5;
     private static final long STARTUP_PREBUFFER_AUDIO_MICROS = 100_000L;
     private static final Pattern TARGET_INPUT_PATTERN = Pattern.compile(
             "<input[^>]*id=[\"']target[\"'][^>]*value=[\"']([^\"']+)[\"']",
@@ -97,6 +96,7 @@ public class GuiVideoPlayer extends GuiScreen {
 
     private volatile long durationMicros = 0;
     private volatile long currentTimeMicros = 0;
+    private volatile int prebufferFrameTarget = 1;
     private volatile boolean restoreScreenOnClose = true;
     private volatile boolean notifyServerOnClose = true;
 
@@ -162,7 +162,10 @@ public class GuiVideoPlayer extends GuiScreen {
                 grabber.start();
 
                 durationMicros = Math.max(0, grabber.getLengthInTime());
-                statusText.set("视频加载中...");
+                double frameRate = grabber.getFrameRate() > 0 ? grabber.getFrameRate() : 30.0;
+                int totalFrames = (int)(durationMicros / 1_000_000.0 * frameRate);
+                prebufferFrameTarget = Math.max(1, (int)(totalFrames * 0.2));
+                statusText.set("视频缓冲中...");
 
                 LaPluma.getLogger().log(Level.INFO, "[Video] Started: " + resolvedSource.playbackUrl
                         + " (" + grabber.getImageWidth() + "x" + grabber.getImageHeight()
@@ -277,7 +280,7 @@ public class GuiVideoPlayer extends GuiScreen {
         if (!audioOpened) {
             return getPendingFrameCount() >= 1;
         }
-        return getPendingFrameCount() >= STARTUP_PREBUFFER_VIDEO_FRAMES
+        return getPendingFrameCount() >= prebufferFrameTarget
                 && audioPlayer != null
                 && audioPlayer.getBufferedMicros() >= STARTUP_PREBUFFER_AUDIO_MICROS;
     }
@@ -285,7 +288,8 @@ public class GuiVideoPlayer extends GuiScreen {
     private void enqueueVideoFrame(long timestampMicros, int width, int height, int[] pixels) {
         synchronized (pendingFrames) {
             pendingFrames.addLast(new TimedVideoFrame(timestampMicros, width, height, pixels));
-            while (pendingFrames.size() > MAX_PENDING_VIDEO_FRAMES) {
+            int cap = Math.max(MAX_PENDING_VIDEO_FRAMES, prebufferFrameTarget + 10);
+            while (pendingFrames.size() > cap) {
                 pendingFrames.removeFirst();
             }
         }
