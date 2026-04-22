@@ -11,7 +11,6 @@ import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.util.ResourceLocation;
-import org.bytedeco.javacv.FFmpegFrameFilter;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.Frame;
 import org.bytedeco.javacv.Java2DFrameConverter;
@@ -46,7 +45,6 @@ public class GuiVideoPlayer extends GuiScreen {
     private static final int MAX_PENDING_VIDEO_FRAMES = 30;
     private static final int STARTUP_PREBUFFER_VIDEO_FRAMES = 5;
     private static final long STARTUP_PREBUFFER_AUDIO_MICROS = 100_000L;
-    private static final long VIDEO_AUDIO_LEAD_MICROS = 20_000L;
     private static final Pattern TARGET_INPUT_PATTERN = Pattern.compile(
             "<input[^>]*id=[\"']target[\"'][^>]*value=[\"']([^\"']+)[\"']",
             Pattern.CASE_INSENSITIVE);
@@ -101,12 +99,6 @@ public class GuiVideoPlayer extends GuiScreen {
     private volatile long currentTimeMicros = 0;
     private volatile boolean restoreScreenOnClose = true;
     private volatile boolean notifyServerOnClose = true;
-    private volatile boolean audioClockActive = false;
-    private volatile int uploadedFrameCount = 0;
-    private int lastCheckedFrameCount = 0;
-    private long stallCheckStartTime = 0;
-    private static final long STALL_DETECT_MS = 3000;
-    private volatile boolean restartRequested = false;
 
     private Thread decoderThread;
     private VideoAudioPlayer audioPlayer;
@@ -148,7 +140,6 @@ public class GuiVideoPlayer extends GuiScreen {
 
         decoderThread = new Thread(() -> {
             FFmpegFrameGrabber grabber = null;
-            FFmpegFrameFilter audioFilter = null;
             try {
                 NativeExtractor.ensureExtracted();
                 converter = new Java2DFrameConverter();
@@ -177,31 +168,14 @@ public class GuiVideoPlayer extends GuiScreen {
                         + " (" + grabber.getImageWidth() + "x" + grabber.getImageHeight()
                         + ", " + String.format("%.1f", grabber.getFrameRate()) + "fps)");
 
-                final int inputAudioChannels = Math.max(1, grabber.getAudioChannels());
-                int outputAudioChannels = inputAudioChannels;
-                int outputSampleRate = Math.max(1, grabber.getSampleRate());
+                final int audioChannels = Math.max(1, grabber.getAudioChannels());
                 boolean audioOpened = false;
                 if (grabber.getAudioChannels() > 0 && grabber.getSampleRate() > 0) {
-                    try {
-                        outputAudioChannels = normalizeOutputAudioChannels(inputAudioChannels);
-                        outputSampleRate = normalizeOutputSampleRate(grabber.getSampleRate());
-                        audioFilter = createAudioFilter(inputAudioChannels, outputAudioChannels, outputSampleRate);
-                    } catch (Throwable filterError) {
-                        audioFilter = null;
-                        outputAudioChannels = inputAudioChannels;
-                        outputSampleRate = Math.max(1, grabber.getSampleRate());
-                        LaPluma.getLogger().log(Level.WARNING, "[Video] Audio filter unavailable, using raw decoded samples", filterError);
-                    }
-
-                    audioOpened = audioPlayer.open(outputSampleRate, outputAudioChannels, 16);
+                    audioOpened = audioPlayer.open(grabber.getSampleRate(), audioChannels, 16);
                     LaPluma.getLogger().log(Level.INFO, "[Video] Audio opened: " + audioOpened
-                            + ", inputChannels=" + inputAudioChannels
-                            + ", outputChannels=" + outputAudioChannels
-                            + ", inputSampleRate=" + grabber.getSampleRate()
-                            + ", outputSampleRate=" + outputSampleRate
-                            + ", filtered=" + (audioFilter != null));
+                            + ", channels=" + audioChannels
+                            + ", sampleRate=" + grabber.getSampleRate());
                 }
-                audioClockActive = false;
                 boolean playbackStarted = false;
                 if (!audioOpened) {
                     playbackStarted = true;
@@ -215,33 +189,6 @@ public class GuiVideoPlayer extends GuiScreen {
                 int videoFrames = 0;
                 int audioFrames = 0;
                 while (!finished.get()) {
-                    if (restartRequested) {
-                        restartRequested = false;
-                        long seekTarget = getPlaybackClockMicros();
-                        LaPluma.getLogger().log(Level.INFO, "[Video] Restarting from " + seekTarget + " micros");
-                        if (audioPlayer != null) {
-                            audioPlayer.close();
-                        }
-                        synchronized (pendingFrames) {
-                            pendingFrames.clear();
-                        }
-                        grabber.setTimestamp(seekTarget);
-                        audioPlayer = new VideoAudioPlayer();
-                        if (audioOpened) {
-                            audioOpened = audioPlayer.open(outputSampleRate, outputAudioChannels, 16);
-                        }
-                        playbackStarted = false;
-                        playing.set(false);
-                        audioClockActive = false;
-                        playbackStartMicros = -1L;
-                        playbackStartNanos = -1L;
-                        uploadedFrameCount = 0;
-                        lastCheckedFrameCount = 0;
-                        stallCheckStartTime = 0;
-                        statusText.set("视频缓冲中...");
-                        continue;
-                    }
-
                     if (paused.get()) {
                         Thread.sleep(50L);
                         playbackStartMicros = -1L;
@@ -263,9 +210,7 @@ public class GuiVideoPlayer extends GuiScreen {
 
                     if (frame.image != null) {
                         videoFrames++;
-                        if (!audioOpened) {
-                            syncVideoFrame(frameTimestampMicros, playbackStartMicros, playbackStartNanos);
-                        }
+                        syncVideoFrame(frameTimestampMicros, playbackStartMicros, playbackStartNanos);
                         BufferedImage img = converter.convert(frame);
                         if (img != null) {
                             int w = img.getWidth();
@@ -277,16 +222,11 @@ public class GuiVideoPlayer extends GuiScreen {
 
                     if (frame.samples != null && audioOpened) {
                         audioFrames++;
-                        if (audioFilter != null) {
-                            writeFilteredAudioFrame(audioFilter, frame, outputAudioChannels);
-                        } else {
-                            writeAudioFrame(frame, outputAudioChannels);
-                        }
+                        writeAudioFrame(frame, audioChannels);
                     }
 
                     if (!playbackStarted && shouldStartPlayback(audioOpened)) {
                         audioPlayer.start();
-                        audioClockActive = audioOpened;
                         playbackStarted = true;
                         playing.set(true);
                         statusText.set("视频播放中");
@@ -313,14 +253,9 @@ public class GuiVideoPlayer extends GuiScreen {
             } finally {
                 playing.set(false);
                 finished.set(true);
-                audioClockActive = false;
                 if (grabber != null) {
                     try { grabber.stop(); } catch (Exception ignored) {}
                     try { grabber.release(); } catch (Exception ignored) {}
-                }
-                if (audioFilter != null) {
-                    try { audioFilter.stop(); } catch (Exception ignored) {}
-                    try { audioFilter.release(); } catch (Exception ignored) {}
                 }
                 if (audioPlayer != null) {
                     audioPlayer.close();
@@ -362,29 +297,6 @@ public class GuiVideoPlayer extends GuiScreen {
         }
     }
 
-    private FFmpegFrameFilter createAudioFilter(int inputAudioChannels, int outputAudioChannels, int outputSampleRate)
-            throws FFmpegFrameFilter.Exception {
-        String channelLayout = outputAudioChannels == 1 ? "mono" : "stereo";
-        String filters = "aresample=" + outputSampleRate + ",aformat=sample_fmts=s16:channel_layouts=" + channelLayout;
-        FFmpegFrameFilter filter = new FFmpegFrameFilter(filters, inputAudioChannels);
-        filter.setAudioInputs(1);
-        filter.setAudioChannels(outputAudioChannels);
-        filter.setSampleRate(outputSampleRate);
-        filter.start();
-        return filter;
-    }
-
-    private int normalizeOutputAudioChannels(int inputAudioChannels) {
-        return inputAudioChannels <= 1 ? 1 : 2;
-    }
-
-    private int normalizeOutputSampleRate(int inputSampleRate) {
-        if (inputSampleRate == 44100 || inputSampleRate == 48000) {
-            return inputSampleRate;
-        }
-        return 48000;
-    }
-
     private void syncVideoFrame(long frameTimestampMicros, long playbackStartMicros, long playbackStartNanos) throws InterruptedException {
         long targetNanos = playbackStartNanos + Math.max(0L, frameTimestampMicros - playbackStartMicros) * 1000L;
         long sleepNanos = targetNanos - System.nanoTime();
@@ -395,15 +307,6 @@ public class GuiVideoPlayer extends GuiScreen {
         long sleepMillis = sleepNanos / 1_000_000L;
         int extraNanos = (int) (sleepNanos % 1_000_000L);
         Thread.sleep(sleepMillis, extraNanos);
-    }
-
-    private void writeFilteredAudioFrame(FFmpegFrameFilter audioFilter, Frame frame, int audioChannels)
-            throws FFmpegFrameFilter.Exception {
-        audioFilter.push(frame);
-        Frame filteredFrame;
-        while ((filteredFrame = audioFilter.pullSamples()) != null) {
-            writeAudioFrame(filteredFrame, audioChannels);
-        }
     }
 
     private ResolvedVideoSource resolveVideoSource(String rawSource) {
@@ -851,10 +754,10 @@ public class GuiVideoPlayer extends GuiScreen {
         }
 
         if (failed.get()) {
-            this.drawCenteredString(this.fontRenderer, "\u00A7c" + statusText.get(), this.width / 2, this.height / 2, 0xFFFF5555);
+            this.drawCenteredString(this.fontRenderer, "§c" + statusText.get(), this.width / 2, this.height / 2, 0xFFFF5555);
         }
         if (paused.get() && playing.get()) {
-            this.drawCenteredString(this.fontRenderer, "\u00A7e|| \u5df2\u6682\u505c", this.width / 2, this.height / 2 - 20, 0xFFFFFF);
+            this.drawCenteredString(this.fontRenderer, "§e|| 已暂停", this.width / 2, this.height / 2 - 20, 0xFFFFFF);
         }
 
         drawTimeText();
@@ -865,46 +768,16 @@ public class GuiVideoPlayer extends GuiScreen {
     }
 
     private void uploadReadyFrames() {
-        long playbackMicros = getPlaybackClockMicros();
         TimedVideoFrame frameToUpload = null;
         synchronized (pendingFrames) {
             while (!pendingFrames.isEmpty()) {
-                TimedVideoFrame nextFrame = pendingFrames.peekFirst();
-                if (audioClockActive && nextFrame.timestampMicros > playbackMicros + VIDEO_AUDIO_LEAD_MICROS) {
-                    break;
-                }
                 frameToUpload = pendingFrames.removeFirst();
             }
         }
 
         if (frameToUpload != null) {
             uploadFrame(frameToUpload);
-            uploadedFrameCount++;
         }
-
-        if (playing.get() && !finished.get() && audioClockActive) {
-            if (uploadedFrameCount == lastCheckedFrameCount) {
-                if (stallCheckStartTime == 0) {
-                    stallCheckStartTime = System.currentTimeMillis();
-                } else if (System.currentTimeMillis() - stallCheckStartTime > STALL_DETECT_MS) {
-                    LaPluma.getLogger().log(Level.INFO, "[Video] Stall detected, requesting restart");
-                    restartRequested = true;
-                    stallCheckStartTime = 0;
-                }
-            } else {
-                lastCheckedFrameCount = uploadedFrameCount;
-                stallCheckStartTime = 0;
-            }
-        }
-    }
-
-    private long getPlaybackClockMicros() {
-        if (audioClockActive && audioPlayer != null && audioPlayer.isOpen()) {
-            long audioMicros = audioPlayer.getPlaybackPositionMicros();
-            currentTimeMicros = Math.max(currentTimeMicros, audioMicros);
-            return audioMicros;
-        }
-        return currentTimeMicros;
     }
 
     private void uploadFrame(TimedVideoFrame frame) {

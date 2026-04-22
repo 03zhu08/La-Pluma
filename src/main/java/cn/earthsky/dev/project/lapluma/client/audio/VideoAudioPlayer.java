@@ -1,16 +1,15 @@
 package cn.earthsky.dev.project.lapluma.client.audio;
 
 import cn.earthsky.dev.project.lapluma.LaPluma;
+import lombok.Getter;
 
 import javax.sound.sampled.*;
 import java.util.logging.Level;
 
 public class VideoAudioPlayer {
 
-    private static final int TARGET_BUFFER_MILLIS = 150;
-    private static final int MIN_BUFFER_BYTES = 4096;
-
     private SourceDataLine line;
+    @Getter
     private float volume = 1.0f;
     private boolean closed = false;
     private int bytesPerSecond = 0;
@@ -22,14 +21,9 @@ public class VideoAudioPlayer {
             line = (SourceDataLine) AudioSystem.getLine(info);
             int frameSize = Math.max(1, channels * (sampleSizeInBits / 8));
             bytesPerSecond = sampleRate * frameSize;
-            int bufferSize = Math.max(MIN_BUFFER_BYTES, (bytesPerSecond * TARGET_BUFFER_MILLIS) / 1000);
-            bufferSize -= bufferSize % frameSize;
-            if (bufferSize <= 0) {
-                bufferSize = frameSize;
-            }
+            int bufferSize = sampleRate * channels * (sampleSizeInBits / 8) * 2;
             line.open(format, bufferSize);
-            LaPluma.getLogger().log(Level.INFO, "[VideoAudio] Opened line: sampleRate=" + sampleRate
-                    + ", channels=" + channels + ", bufferSize=" + bufferSize);
+            line.start();
             return true;
         } catch (LineUnavailableException e) {
             LaPluma.getLogger().log(Level.WARNING, "[VideoAudio] Failed to open audio line", e);
@@ -38,9 +32,6 @@ public class VideoAudioPlayer {
     }
 
     public void start() {
-        if (line != null && !closed && !line.isRunning()) {
-            line.start();
-        }
     }
 
     public void write(byte[] data, int offset, int length) {
@@ -59,21 +50,13 @@ public class VideoAudioPlayer {
         }
     }
 
-    public float getVolume() {
-        return volume;
-    }
-
     public long getPlaybackPositionMicros() {
-        if (line == null || closed) {
-            return 0L;
-        }
+        if (line == null || closed) return 0L;
         return Math.max(0L, line.getMicrosecondPosition());
     }
 
     public long getBufferedMicros() {
-        if (line == null || closed || bytesPerSecond <= 0) {
-            return 0L;
-        }
+        if (line == null || closed || bytesPerSecond <= 0) return 0L;
         long queuedBytes = Math.max(0, line.getBufferSize() - line.available());
         return (queuedBytes * 1_000_000L) / bytesPerSecond;
     }
@@ -92,4 +75,5 @@ public class VideoAudioPlayer {
     public boolean isOpen() {
         return line != null && !closed;
     }
+
 }
