@@ -936,7 +936,7 @@ public class GuiDialog extends GuiScreen {
                     int padding = 20;
                     int trimWidth = this.width - padding * 2;
                     int textColor = (alphaInt << 24) | 0xDCDCDC;
-                    drawCenteredSplitString(trimWidth, top, getHeightScale() * 1.5d, textColor, partialTicks);
+                    drawCenteredSplitString(trimWidth, top, getHeightScale(), textColor, partialTicks);
                     GL11.glColor4f(1f, 1f, 1f, 1f);
                 } else {
                     int centerColor = (alphaInt << 24) | 0xFFFFFF;
