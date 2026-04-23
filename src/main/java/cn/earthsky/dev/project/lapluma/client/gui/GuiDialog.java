@@ -589,7 +589,10 @@ public class GuiDialog extends GuiScreen {
             charFbo = new Framebuffer(fbW, fbH, false);
         }
 
+        // Pop caller's scale matrix, render to FBO in identity space, then restore
         GL11.glPopMatrix();
+        GL11.glPushMatrix();
+        GL11.glLoadIdentity();
 
         charFbo.framebufferClear();
         charFbo.bindFramebuffer(true);
@@ -614,6 +617,7 @@ public class GuiDialog extends GuiScreen {
 
         mc.getFramebuffer().bindFramebuffer(true);
 
+        GL11.glPopMatrix();
         GL11.glPushMatrix();
         GL11.glScaled(currentScale, currentScale, 1);
 
@@ -932,7 +936,7 @@ public class GuiDialog extends GuiScreen {
                     int padding = 20;
                     int trimWidth = this.width - padding * 2;
                     int textColor = (alphaInt << 24) | 0xDCDCDC;
-                    drawCenteredSplitString(trimWidth, top, 1.0d, textColor, partialTicks);
+                    drawCenteredSplitString(trimWidth, top, getHeightScale() * 1.5d, textColor, partialTicks);
                     GL11.glColor4f(1f, 1f, 1f, 1f);
                 } else {
                     int centerColor = (alphaInt << 24) | 0xFFFFFF;

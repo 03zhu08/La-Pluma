@@ -121,3 +121,4 @@ run/
 *.launch
 .settings/
 /src/main/resources/assets/lapluma/journals/.vscode/extensions.json
+/bin/

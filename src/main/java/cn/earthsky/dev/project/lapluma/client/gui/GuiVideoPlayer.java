@@ -43,7 +43,7 @@ public class GuiVideoPlayer extends GuiScreen {
     private static final int HTTP_READ_TIMEOUT_MS = 15_000;
     private static final int MAX_HTTP_REDIRECTS = 8;
     private static final int MAX_HTML_BYTES = 32_768;
-    private static final int MAX_PENDING_VIDEO_FRAMES = 900;
+    private static final long MAX_PENDING_VIDEO_BYTES = 512L * 1024 * 1024;
     private static final Pattern TARGET_INPUT_PATTERN = Pattern.compile(
             "<input[^>]*id=[\"']target[\"'][^>]*value=[\"']([^\"']+)[\"']",
             Pattern.CASE_INSENSITIVE);
@@ -92,6 +92,7 @@ public class GuiVideoPlayer extends GuiScreen {
     private final AtomicBoolean failed = new AtomicBoolean(false);
     private final AtomicReference<String> statusText = new AtomicReference<>("视频加载中...");
     private final Deque<TimedVideoFrame> pendingFrames = new ArrayDeque<>();
+    private long pendingFrameBytes = 0;
 
     private volatile long durationMicros = 0;
     private volatile long currentTimeMicros = 0;
@@ -135,6 +136,7 @@ public class GuiVideoPlayer extends GuiScreen {
         statusText.set("视频加载中...");
         synchronized (pendingFrames) {
             pendingFrames.clear();
+            pendingFrameBytes = 0;
         }
         audioPlayer = new VideoAudioPlayer();
 
@@ -276,10 +278,13 @@ public class GuiVideoPlayer extends GuiScreen {
     }
 
     private void enqueueVideoFrame(long timestampMicros, int width, int height, int[] pixels) {
+        long frameBytes = (long) pixels.length * 4;
         synchronized (pendingFrames) {
             pendingFrames.addLast(new TimedVideoFrame(timestampMicros, width, height, pixels));
-            while (pendingFrames.size() > MAX_PENDING_VIDEO_FRAMES) {
-                pendingFrames.removeFirst();
+            pendingFrameBytes += frameBytes;
+            while (pendingFrameBytes > MAX_PENDING_VIDEO_BYTES && pendingFrames.size() > 1) {
+                TimedVideoFrame dropped = pendingFrames.removeFirst();
+                pendingFrameBytes -= (long) dropped.pixels.length * 4;
             }
         }
     }
@@ -767,7 +772,9 @@ public class GuiVideoPlayer extends GuiScreen {
                 if (next.timestampMicros > elapsedMicros) {
                     break;
                 }
-                frameToUpload = pendingFrames.removeFirst();
+                TimedVideoFrame removed = pendingFrames.removeFirst();
+                pendingFrameBytes -= (long) removed.pixels.length * 4;
+                frameToUpload = removed;
             }
         }
 
@@ -843,6 +850,7 @@ public class GuiVideoPlayer extends GuiScreen {
         finished.set(true);
         synchronized (pendingFrames) {
             pendingFrames.clear();
+            pendingFrameBytes = 0;
         }
         if (videoTextureLocation != null) {
             Minecraft.getMinecraft().getTextureManager().deleteTexture(videoTextureLocation);
