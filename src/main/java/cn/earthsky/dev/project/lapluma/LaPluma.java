@@ -1,5 +1,7 @@
 package cn.earthsky.dev.project.lapluma;
 
+import cn.earthsky.dev.project.lapluma.client.gui.chat.GuiChatScreen;
+import cn.earthsky.dev.project.lapluma.client.gui.chat.data.ChatDataManager;
 import cn.earthsky.dev.project.lapluma.common.JournalNamespace;
 import cn.earthsky.dev.project.lapluma.common.commands.PlayJournalCommand;
 import cn.earthsky.dev.project.lapluma.common.commands.PlayVideoCommand;
@@ -12,17 +14,20 @@ import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.*;
 import net.minecraft.item.Item;
+import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundEvent;
 import net.minecraftforge.client.ClientCommandHandler;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.client.event.sound.SoundSetupEvent;
 import net.minecraftforge.event.RegistryEvent;
+import net.minecraftforge.fml.client.registry.ClientRegistry;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPostInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
 import net.minecraftforge.fml.common.registry.GameRegistry;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.codec.digest.DigestUtils;
@@ -59,7 +64,7 @@ public class LaPluma {
 
     public static String MD5HASH;
 
-
+    public static KeyBinding chatKey;
 
     /**
      * This is the instance of your mod as created by Forge. It will never be null.
@@ -74,6 +79,7 @@ public class LaPluma {
     @Mod.EventHandler
     public void preinit(FMLPreInitializationEvent event) {
         new ProxyPacketHandler().init();
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.register(ObjectRegistryHandler.class);
     }
 
     /**
@@ -83,6 +89,9 @@ public class LaPluma {
     public void init(FMLInitializationEvent event) {
         ClientCommandHandler.instance.registerCommand(new PlayJournalCommand());
         ClientCommandHandler.instance.registerCommand(new PlayVideoCommand());
+
+        chatKey = new KeyBinding("key.lapluma.chat", org.lwjgl.input.Keyboard.KEY_U, "key.categories.lapluma");
+        ClientRegistry.registerKeyBinding(chatKey);
     }
 
     /**
@@ -92,7 +101,12 @@ public class LaPluma {
     public void postinit(FMLPostInitializationEvent event) {
         GuiDialog.EXAMPLE_STRUCTURE = JournalNamespace.get("example");
 
-        ((SimpleReloadableResourceManager) Minecraft.getMinecraft().getResourceManager()).registerReloadListener(resourceManager -> preloadResources());
+        ((SimpleReloadableResourceManager) Minecraft.getMinecraft().getResourceManager()).registerReloadListener(resourceManager -> {
+            preloadResources();
+            ChatDataManager.loadTestData();
+        });
+
+        ChatDataManager.loadTestData();
     }
 
     public static boolean hasDialogBubbleProvided = false;
@@ -242,7 +256,9 @@ public class LaPluma {
         public static final SoundEvent BEEP = new SoundEvent(new ResourceLocation("lapluma","beep"));
         public static final SoundEvent CLICK = new SoundEvent(new ResourceLocation("lapluma","click"));
         public static final SoundEvent MUSIC = new SoundEvent(new ResourceLocation("lapluma","music"));
-
+        public static final SoundEvent CHAT_OPEN = new SoundEvent(new ResourceLocation("lapluma","chat_open"));
+        public static final SoundEvent CHAT_MESSAGE = new SoundEvent(new ResourceLocation("lapluma","chat_message"));
+        public static final SoundEvent CHAT_SEND = new SoundEvent(new ResourceLocation("lapluma","chat_send"));
     }
 
     /**
@@ -255,6 +271,17 @@ public class LaPluma {
         public static void onRenderOverlay(RenderGameOverlayEvent.Pre event) {
             if (Minecraft.getMinecraft().currentScreen instanceof GuiDialog) {
                 event.setCanceled(true);
+            }
+        }
+
+        @SubscribeEvent
+        public static void onClientTick(TickEvent.ClientTickEvent event) {
+            if (event.phase != TickEvent.Phase.END) return;
+            ChatDataManager.tick();
+            if (chatKey != null && chatKey.isPressed()) {
+                if (!(Minecraft.getMinecraft().currentScreen instanceof GuiChatScreen)) {
+                    Minecraft.getMinecraft().displayGuiScreen(new GuiChatScreen());
+                }
             }
         }
 
@@ -273,6 +300,9 @@ public class LaPluma {
             event.getRegistry().register(Sounds.BEEP.setRegistryName(new ResourceLocation("lapluma", "beep")));
             event.getRegistry().register(Sounds.CLICK.setRegistryName(new ResourceLocation("lapluma", "click")));
             event.getRegistry().register(Sounds.MUSIC.setRegistryName(new ResourceLocation("lapluma", "music")));
+            event.getRegistry().register(Sounds.CHAT_OPEN.setRegistryName(new ResourceLocation("lapluma", "chat_open")));
+            event.getRegistry().register(Sounds.CHAT_MESSAGE.setRegistryName(new ResourceLocation("lapluma", "chat_message")));
+            event.getRegistry().register(Sounds.CHAT_SEND.setRegistryName(new ResourceLocation("lapluma", "chat_send")));
         }
 
         /**

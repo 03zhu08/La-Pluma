@@ -46,7 +46,7 @@ if (!supportedPlatforms.containsKey(targetPlatform)) {
 }
 
 group = 'EarthSkyDev'
-version = '1.4.0-SNAPSHOT'
+version = '1.4.1-SNAPSHOT'
 archivesBaseName = 'La Pluma'
 
 minecraft {

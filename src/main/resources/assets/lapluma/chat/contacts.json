@@ -1,0 +1,46 @@
+[
+  {
+    "id": "npc_001",
+    "name": "艾琳·霜叶",
+    "avatar": "chat/icon/contact_default",
+    "faction": "scholar",
+    "lastMessage": "那份古籍的翻译已经完成了，你来看看？",
+    "lastTimestamp": 1714000000000,
+    "unreadCount": 2,
+    "isGroup": false,
+    "members": []
+  },
+  {
+    "id": "npc_002",
+    "name": "卡尔·铁锤",
+    "avatar": "chat/icon/contact_default",
+    "faction": "guard",
+    "lastMessage": "城门口发现了可疑的脚印。",
+    "lastTimestamp": 1713990000000,
+    "unreadCount": 0,
+    "isGroup": false,
+    "members": []
+  },
+  {
+    "id": "npc_003",
+    "name": "莉娜·银币",
+    "avatar": "chat/icon/contact_default",
+    "faction": "merchant",
+    "lastMessage": "新到了一批稀有矿石，要不要来看看？",
+    "lastTimestamp": 1713980000000,
+    "unreadCount": 1,
+    "isGroup": false,
+    "members": []
+  },
+  {
+    "id": "group_001",
+    "name": "远征小队",
+    "avatar": "chat/icon/group_default",
+    "faction": "",
+    "lastMessage": "[卡尔] 集合时间改到明天黎明。",
+    "lastTimestamp": 1713995000000,
+    "unreadCount": 5,
+    "isGroup": true,
+    "members": ["npc_001", "npc_002", "npc_003"]
+  }
+]

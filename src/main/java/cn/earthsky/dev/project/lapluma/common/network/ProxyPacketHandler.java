@@ -1,5 +1,7 @@
 package cn.earthsky.dev.project.lapluma.common.network;
 
+import cn.earthsky.dev.project.lapluma.client.gui.chat.GuiChatScreen;
+import cn.earthsky.dev.project.lapluma.client.gui.chat.data.ChatDataManager;
 import cn.earthsky.dev.project.lapluma.LaPluma;
 import cn.earthsky.dev.project.lapluma.client.gui.GuiDialog;
 import cn.earthsky.dev.project.lapluma.client.gui.GuiVideoPlayer;
@@ -151,6 +153,19 @@ public class ProxyPacketHandler {
             } else if(a == 12) {
                 signingKey = hexToBytes(c);
                 LaPluma.getLogger().log(Level.INFO, "[Security] Received signing key from server");
+            } else if(a == 20) {
+                Minecraft.getMinecraft().addScheduledTask(() ->
+                        Minecraft.getMinecraft().displayGuiScreen(new GuiChatScreen(c.isEmpty() ? null : c)));
+            } else if(a == 21) {
+                Minecraft.getMinecraft().addScheduledTask(() -> ChatDataManager.parseContactsJson(c));
+            } else if(a == 22) {
+                Minecraft.getMinecraft().addScheduledTask(() -> ChatDataManager.parseMessagesJson(c));
+            } else if(a == 24) {
+                Minecraft.getMinecraft().addScheduledTask(() -> ChatDataManager.parseNewMessageJson(c));
+            } else if(a == 26) {
+                Minecraft.getMinecraft().addScheduledTask(() -> ChatDataManager.setTyping(c, b == 1));
+            } else if(a == 27) {
+                Minecraft.getMinecraft().addScheduledTask(() -> ChatDataManager.parseUpdateContactJson(c));
             }
         }
     }
@@ -276,6 +291,14 @@ public class ProxyPacketHandler {
                  data=-1: 完整性验证包 ctx=journalName|fullSignature|totalChunks
             11 - 对话文件传输完成确认 (客户端→服务端)
             12 - 签名密钥下发 (服务端→客户端, ctx=hex密钥)
+            20 - 打开聊天界面 (服务端→客户端, ctx=contactId可选)
+            21 - 推送联系人列表 (服务端→客户端, data: 0=全量/1=增量, ctx=JSON)
+            22 - 推送历史消息 (服务端→客户端, data=pageIndex, ctx=JSON)
+            24 - 推送新消息 (服务端→客户端, ctx=JSON)
+            25 - 玩家选择回复 (客户端→服务端, data=optionIndex, ctx=JSON)
+            26 - 输入中指示器 (服务端→客户端, data: 0=停止/1=开始, ctx=contactId)
+            27 - 更新单个联系人 (服务端→客户端, ctx=JSON)
+            28 - 对话已读完毕 (客户端→服务端, ctx=contactId)
             23 - KeepAlive
     1 int - 附加内容
                0 = 0 空

@@ -19,5 +19,26 @@
     "sounds": [
       "random/orb"
     ]
+  },
+  "chat_open": {
+    "category": "master",
+    "subtitle": "lapluma.sound.chat_open",
+    "sounds": [
+      "lapluma:click"
+    ]
+  },
+  "chat_message": {
+    "category": "master",
+    "subtitle": "lapluma.sound.chat_message",
+    "sounds": [
+      "lapluma:beep"
+    ]
+  },
+  "chat_send": {
+    "category": "master",
+    "subtitle": "lapluma.sound.chat_send",
+    "sounds": [
+      "lapluma:click"
+    ]
   }
 }
