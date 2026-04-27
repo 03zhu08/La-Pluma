@@ -2,6 +2,11 @@
 #contact group_001
 #title 远征计划
 #status completed
+#skin chat/skin/group_default
+#faction
+#group true
+#members npc_001,npc_002,npc_003
+#name 远征小队
 
 @npc_002|卡尔·铁锤
 各位，明天的远征计划有变动。

@@ -137,6 +137,12 @@ public class ChatDataManager {
     public static List<ChatMessage> getMessages(String contactId) {
         Conversation conv = getActiveConversation(contactId);
         if (conv != null) return conv.getVisibleMessages();
+        // If contact has any conversation, use the first one (avoid raw fallback)
+        Map<String, Conversation> contactConvs = conversations.get(contactId);
+        if (contactConvs != null && !contactConvs.isEmpty()) {
+            conv = contactConvs.values().iterator().next();
+            return conv.getVisibleMessages();
+        }
         return messages.getOrDefault(contactId, Collections.emptyList());
     }
 
@@ -215,9 +221,16 @@ public class ChatDataManager {
         if (contact != null) contact.setUnreadCount(0);
     }
 
+    public static void reset() {
+        contacts.clear();
+        messages.clear();
+        typingContacts.clear();
+        conversations.clear();
+        activeConversationIds.clear();
+    }
+
     public static void loadTestData() {
         try {
-            loadTestContacts();
             loadConversation("npc_001_main");
             loadConversation("npc_001_quest");
             loadConversation("group_001_plan");
@@ -226,39 +239,6 @@ public class ChatDataManager {
             loadConversation("npc_003_shop");
         } catch (Throwable e) {
             LaPluma.getLogger().log(Level.WARNING, "[Chat] Failed to load test data", e);
-        }
-    }
-
-    private static void loadTestContacts() {
-        try {
-            IResource res = Minecraft.getMinecraft().getResourceManager()
-                    .getResource(new ResourceLocation("lapluma", "chat/contacts.json"));
-            InputStreamReader reader = new InputStreamReader(res.getInputStream(), StandardCharsets.UTF_8);
-            Type listType = new TypeToken<List<ChatContact>>(){}.getType();
-            List<ChatContact> list = GSON.fromJson(reader, listType);
-            reader.close();
-            if (list != null) setContacts(list);
-            LaPluma.getLogger().log(Level.INFO, "[Chat] Loaded " + contacts.size() + " test contacts");
-        } catch (Throwable e) {
-            LaPluma.getLogger().log(Level.WARNING, "[Chat] contacts.json not found, skipping", e);
-        }
-    }
-
-    private static void loadTestMessages(String fileId) {
-        try {
-            IResource res = Minecraft.getMinecraft().getResourceManager()
-                    .getResource(new ResourceLocation("lapluma", "chat/messages_" + fileId + ".json"));
-            InputStreamReader reader = new InputStreamReader(res.getInputStream(), StandardCharsets.UTF_8);
-            JsonObject obj = GSON.fromJson(reader, JsonObject.class);
-            reader.close();
-            if (obj == null) return;
-            String contactId = obj.get("contactId").getAsString();
-            Type listType = new TypeToken<List<ChatMessage>>(){}.getType();
-            List<ChatMessage> msgs = GSON.fromJson(obj.get("messages"), listType);
-            if (msgs != null) setMessages(contactId, msgs);
-            LaPluma.getLogger().log(Level.INFO, "[Chat] Loaded " + msgs.size() + " messages for " + contactId);
-        } catch (Throwable e) {
-            LaPluma.getLogger().log(Level.WARNING, "[Chat] messages_" + fileId + ".json not found, skipping", e);
         }
     }
 
@@ -272,9 +252,60 @@ public class ChatDataManager {
         JsonObject obj = GSON.fromJson(json, JsonObject.class);
         if (obj == null) return;
         String contactId = obj.get("contactId").getAsString();
+        String conversationId = obj.has("conversationId") ? obj.get("conversationId").getAsString() : contactId;
+        String title = obj.has("title") ? obj.get("title").getAsString() : conversationId;
+        String status = obj.has("status") ? obj.get("status").getAsString() : "unread";
+
         Type listType = new TypeToken<List<ChatMessage>>(){}.getType();
         List<ChatMessage> msgs = GSON.fromJson(obj.get("messages"), listType);
-        if (msgs != null) setMessages(contactId, msgs);
+        if (msgs == null) return;
+
+        // Parse branch metadata from server
+        Map<String, Integer> branchIndexMap = new HashMap<>();
+        if (obj.has("branchIndexMap") && !obj.get("branchIndexMap").isJsonNull()) {
+            JsonObject bim = obj.get("branchIndexMap").getAsJsonObject();
+            for (Map.Entry<String, JsonElement> e : bim.entrySet()) {
+                branchIndexMap.put(e.getKey(), e.getValue().getAsInt());
+            }
+        }
+        Set<Integer> branchStarts = new LinkedHashSet<>();
+        if (obj.has("branchStarts") && !obj.get("branchStarts").isJsonNull()) {
+            JsonArray bs = obj.get("branchStarts").getAsJsonArray();
+            for (JsonElement e : bs) {
+                branchStarts.add(e.getAsInt());
+            }
+        }
+        int mainContinuationIndex = obj.has("mainContinuationIndex") ? obj.get("mainContinuationIndex").getAsInt() : -1;
+        int sequenceStart = obj.has("sequenceStart") ? obj.get("sequenceStart").getAsInt() : 0;
+
+        // Create Conversation with reveal state from server
+        Conversation conv = new Conversation(conversationId, contactId, title, status, msgs,
+                branchIndexMap, branchStarts, mainContinuationIndex);
+        conv.sequenceStart = sequenceStart;
+
+        // Override revealedIndices from server envelope
+        if (obj.has("revealedIndices") && !obj.get("revealedIndices").isJsonNull()) {
+            conv.revealedIndices.clear();
+            JsonArray ri = obj.get("revealedIndices").getAsJsonArray();
+            for (JsonElement e : ri) {
+                conv.revealedIndices.add(e.getAsInt());
+            }
+            conv.revealedInSequence = conv.revealedIndices.size();
+        }
+
+        // Also apply per-message revealTime
+        for (int i = 0; i < msgs.size(); i++) {
+            if (msgs.get(i).getRevealTime() > 0) {
+                conv.revealedIndices.add(i);
+            }
+        }
+
+        // Store conversation and set as active
+        conversations.computeIfAbsent(contactId, k -> new LinkedHashMap<>()).put(conversationId, conv);
+        activeConversationIds.put(contactId, conversationId);
+
+        LaPluma.getLogger().info("[Chat] Received conversation " + contactId + "/" + conversationId
+                + " status=" + status + " revealed=" + conv.revealedIndices.size() + "/" + msgs.size());
     }
 
     public static void parseNewMessageJson(String json) {
@@ -292,11 +323,11 @@ public class ChatDataManager {
         if (contact != null) updateContact(contact);
     }
 
-    public static String buildReplyJson(String contactId, String messageId, String option) {
+    public static String buildReplyJson(String contactId, String branchId, int optionIndex) {
         JsonObject obj = new JsonObject();
         obj.addProperty("contactId", contactId);
-        obj.addProperty("messageId", messageId);
-        obj.addProperty("option", option);
+        obj.addProperty("branchId", branchId != null ? branchId : "");
+        obj.addProperty("optionIndex", optionIndex);
         return obj.toString();
     }
 
@@ -433,6 +464,29 @@ public class ChatDataManager {
             List<ChatMessage> msgs = parsed.messages;
             Conversation conv = new Conversation(conversationId, contactId, title, status, msgs, parsed.branchIndexMap, parsed.branchStarts, parsed.mainContinuationIndex);
             conversations.computeIfAbsent(contactId, k -> new LinkedHashMap<>()).put(conversationId, conv);
+
+            // Build ChatContact from .chat metadata
+            ChatContact contact = contacts.computeIfAbsent(contactId, k -> {
+                ChatContact c = new ChatContact();
+                c.setId(contactId);
+                c.setName(parsed.contactName);
+                c.setSkin(parsed.skin);
+                c.setFaction(parsed.faction != null ? parsed.faction : "");
+                c.setGroup(parsed.isGroup);
+                c.setMembers(parsed.members != null ? parsed.members : new ArrayList<>());
+                return c;
+            });
+            if (parsed.contactName != null) contact.setName(parsed.contactName);
+            // Auto-detect name from first NPC message if not set
+            if (contact.getName() == null || contact.getName().equals(contactId)) {
+                for (ChatMessage msg : msgs) {
+                    if (!"$player".equals(msg.getSenderId()) && !"SYSTEM".equals(msg.getSenderId()) && msg.getSenderName() != null) {
+                        contact.setName(msg.getSenderName());
+                        break;
+                    }
+                }
+            }
+
             if ("completed".equals(status)) {
                 messages.put(contactId, new ArrayList<>(msgs));
             }

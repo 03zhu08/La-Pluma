@@ -2,6 +2,9 @@
 #contact npc_003
 #title 稀有矿石
 #status unread
+#skin chat/skin/contact_default
+#faction merchant
+#group false
 
 @npc_003|莉娜·银币
 嘿！好久不见，最近生意怎么样？我这边新到了一批稀有矿石，你肯定会感兴趣。

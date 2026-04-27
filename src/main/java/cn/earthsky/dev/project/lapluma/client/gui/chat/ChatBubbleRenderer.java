@@ -1,5 +1,7 @@
 package cn.earthsky.dev.project.lapluma.client.gui.chat;
 
+import cn.earthsky.dev.project.lapluma.client.gui.chat.data.ChatContact;
+import cn.earthsky.dev.project.lapluma.client.gui.chat.data.ChatDataManager;
 import cn.earthsky.dev.project.lapluma.client.gui.chat.data.ChatMessage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.AbstractClientPlayer;
@@ -78,11 +80,19 @@ public class ChatBubbleRenderer {
             bubbleX = avatarX + AVATAR_SIZE + AVATAR_GAP;
         }
 
+        boolean showName = !isPlayer && msg.getSenderName() != null && !msg.getSenderName().isEmpty();
+        int avatarY = showName ? y - LINE_HEIGHT : y;
+
         GlStateManager.color(1f, 1f, 1f, alpha);
         if (isPlayer) {
-            drawPlayerHead(avatarX, y);
+            drawPlayerHead(avatarX, avatarY);
         } else {
-            drawAvatar(msg.getSenderAvatar(), avatarX, y);
+            ChatContact senderContact = ChatDataManager.getContacts().get(msg.getSenderId());
+            if (senderContact != null && senderContact.getSkin() != null && !senderContact.getSkin().isEmpty()) {
+                drawSkinHead(senderContact.getSkin(), avatarX, avatarY);
+            } else {
+                drawIcon(avatarX, avatarY);
+            }
         }
         GlStateManager.color(1f, 1f, 1f, 1f);
 
@@ -101,7 +111,7 @@ public class ChatBubbleRenderer {
             textY += LINE_HEIGHT;
         }
 
-        if (!isPlayer && msg.getSenderName() != null && !msg.getSenderName().isEmpty()) {
+        if (showName) {
             fr.drawStringWithShadow(msg.getSenderName(), bubbleX + BUBBLE_PADDING_H, y - LINE_HEIGHT, applyAlpha(0xFF8899AA, alpha));
         }
     }
@@ -118,16 +128,23 @@ public class ChatBubbleRenderer {
         fr.drawStringWithShadow(msg.getContent(), cx, y + 2, applyAlpha(SYSTEM_TEXT, alpha));
     }
 
-    private static void drawAvatar(String avatarPath, int x, int y) {
+    private static void drawIcon(int x, int y) {
         Minecraft mc = Minecraft.getMinecraft();
         try {
-            if (avatarPath != null && !avatarPath.isEmpty()) {
-                mc.getTextureManager().bindTexture(new ResourceLocation("lapluma", avatarPath + ".png"));
-            } else {
-                mc.getTextureManager().bindTexture(new ResourceLocation("lapluma", "chat/icon/contact_default.png"));
-            }
-            GlStateManager.color(1f, 1f, 1f, 1f);
+            mc.getTextureManager().bindTexture(new ResourceLocation("lapluma", "chat/skin/contact_default.png"));
             Gui.drawModalRectWithCustomSizedTexture(x, y, 0, 0, AVATAR_SIZE, AVATAR_SIZE, AVATAR_SIZE, AVATAR_SIZE);
+        } catch (Throwable ignored) {
+            Gui.drawRect(x, y, x + AVATAR_SIZE, y + AVATAR_SIZE, 0xFF555555);
+        }
+    }
+
+    public static void drawSkinHead(String skinPath, int x, int y) {
+        Minecraft mc = Minecraft.getMinecraft();
+        try {
+            ResourceLocation skinLoc = new ResourceLocation("lapluma", skinPath + ".png");
+            mc.getTextureManager().bindTexture(skinLoc);
+            Gui.drawScaledCustomSizeModalRect(x, y, 8, 8, 8, 8, AVATAR_SIZE, AVATAR_SIZE, 64, 64);
+            Gui.drawScaledCustomSizeModalRect(x, y, 40, 8, 8, 8, AVATAR_SIZE, AVATAR_SIZE, 64, 64);
         } catch (Throwable ignored) {
             Gui.drawRect(x, y, x + AVATAR_SIZE, y + AVATAR_SIZE, 0xFF555555);
         }
@@ -139,9 +156,7 @@ public class ChatBubbleRenderer {
             if (mc.player instanceof AbstractClientPlayer) {
                 ResourceLocation skin = ((AbstractClientPlayer) mc.player).getLocationSkin();
                 mc.getTextureManager().bindTexture(skin);
-                // Head front: 8x8 at UV (8,8) in 64x64 texture, scaled to AVATAR_SIZE
                 Gui.drawScaledCustomSizeModalRect(x, y, 8, 8, 8, 8, AVATAR_SIZE, AVATAR_SIZE, 64, 64);
-                // Hat overlay: 8x8 at UV (40,8)
                 Gui.drawScaledCustomSizeModalRect(x, y, 40, 8, 8, 8, AVATAR_SIZE, AVATAR_SIZE, 64, 64);
             }
         } catch (Throwable ignored) {

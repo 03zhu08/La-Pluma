@@ -17,6 +17,12 @@ public class ChatJournalParser {
         public Map<String, Integer> branchIndexMap = new LinkedHashMap<>();
         public Set<Integer> branchStarts = new HashSet<>();
         public int mainContinuationIndex = -1;
+        // Contact metadata from .chat headers
+        public String skin;
+        public String faction;
+        public boolean isGroup;
+        public List<String> members = new ArrayList<>();
+        public String contactName;
     }
 
     public static Result parse(InputStream in) throws Exception {
@@ -44,6 +50,11 @@ public class ChatJournalParser {
                         case "contact": r.contactId = value; break;
                         case "title": r.title = value; break;
                         case "status": r.status = value; break;
+                        case "skin": r.skin = value; break;
+                        case "faction": r.faction = value.isEmpty() ? null : value; break;
+                        case "group": r.isGroup = "true".equals(value); break;
+                        case "members": r.members = value.isEmpty() ? new ArrayList<>() : Arrays.asList(value.split("\\s*,\\s*")); break;
+                        case "name": r.contactName = value; break;
                     }
                 }
             } else if (trimmed.startsWith("=")) {

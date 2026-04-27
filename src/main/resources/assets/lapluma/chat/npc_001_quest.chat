@@ -2,6 +2,9 @@
 #contact npc_001
 #title 炼金术任务
 #status unread
+#skin chat/skin/contact_default
+#faction scholar
+#group false
 
 @npc_001|艾琳·霜叶
 冒险者，你之前帮我收集的古籍翻译材料很有用。现在我准备开始实际的炼金实验了。

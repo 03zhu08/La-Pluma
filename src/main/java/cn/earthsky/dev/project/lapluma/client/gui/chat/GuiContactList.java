@@ -122,23 +122,23 @@ public class GuiContactList {
         boolean selected = contact.getId().equals(selectedContactId);
         boolean hovered = mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY < y + ENTRY_HEIGHT;
 
+        int textX = x + PADDING + AVATAR_SIZE + PADDING;
+
         if (selected) {
-            Gui.drawRect(x + 1, y, x + w - 1, y + ENTRY_HEIGHT, SELECTED_COLOR);
+            Gui.drawRect(textX, y, x + w - 1, y + ENTRY_HEIGHT, SELECTED_COLOR);
             Gui.drawRect(x, y, x + 2, y + ENTRY_HEIGHT, 0xFFFF5733);
         } else if (hovered) {
-            Gui.drawRect(x + 1, y, x + w - 1, y + ENTRY_HEIGHT, HOVER_COLOR);
+            Gui.drawRect(textX, y, x + w - 1, y + ENTRY_HEIGHT, HOVER_COLOR);
         }
 
         drawContactAvatar(contact, x + PADDING, y + (ENTRY_HEIGHT - AVATAR_SIZE) / 2);
-
-        int textX = x + PADDING + AVATAR_SIZE + PADDING;
         int nameColor = selected ? 0xFFFFFFFF : 0xFFCCCCCC;
         fr.drawStringWithShadow(contact.getName(), textX, y + 4, nameColor);
 
         if (contact.getFaction() != null && !contact.getFaction().isEmpty()) {
             try {
                 Minecraft.getMinecraft().getTextureManager().bindTexture(
-                        new ResourceLocation("lapluma", "chat/icon/faction_" + contact.getFaction() + ".png"));
+                        new ResourceLocation("lapluma", "chat/skin/faction_" + contact.getFaction() + ".png"));
                 GlStateManager.color(1f, 1f, 1f, 0.7f);
                 Gui.drawModalRectWithCustomSizedTexture(textX + fr.getStringWidth(contact.getName()) + 2, y + 4, 0, 0, 8, 8, 8, 8);
                 GlStateManager.color(1f, 1f, 1f, 1f);
@@ -158,8 +158,18 @@ public class GuiContactList {
             fr.drawStringWithShadow(preview, textX, y + 16, 0xFF777777);
         }
 
+        // Completed checkmark — only when single conversation (no dropdown)
+        ChatDataManager.Conversation activeConv = ChatDataManager.getActiveConversation(contact.getId());
+        boolean isCompleted = activeConv != null && "completed".equals(activeConv.status);
+        if (isCompleted && !hasConvs) {
+            String check = "§a✓";
+            int checkW = fr.getStringWidth(check.replace("§a", ""));
+            int checkX = x + w - checkW - 4;
+            fr.drawString(check, checkX, y + 4, 0xFF66BB66);
+        }
+
         // Unread badge
-        if (contact.getUnreadCount() > 0) {
+        if (contact.getUnreadCount() > 0 && (!isCompleted || hasConvs)) {
             String badge = String.valueOf(contact.getUnreadCount());
             int badgeW = Math.max(fr.getStringWidth(badge) + 4, 10);
             int badgeX = x + w - badgeW - 4;
@@ -222,17 +232,20 @@ public class GuiContactList {
     private void drawContactAvatar(ChatContact contact, int x, int y) {
         Minecraft mc = Minecraft.getMinecraft();
         try {
-            String avatar = contact.getAvatar();
-            if (avatar != null && !avatar.isEmpty()) {
-                mc.getTextureManager().bindTexture(new ResourceLocation("lapluma", avatar + ".png"));
+            String skin = contact.getSkin();
+            if (skin != null && !skin.isEmpty()) {
+                mc.getTextureManager().bindTexture(new ResourceLocation("lapluma", skin + ".png"));
+                // Crop head from 64x64 skin: front at UV(8,8), hat at UV(40,8)
+                Gui.drawScaledCustomSizeModalRect(x, y, 8, 8, 8, 8, AVATAR_SIZE, AVATAR_SIZE, 64, 64);
+                Gui.drawScaledCustomSizeModalRect(x, y, 40, 8, 8, 8, AVATAR_SIZE, AVATAR_SIZE, 64, 64);
             } else {
                 ResourceLocation def = contact.isGroup()
-                        ? new ResourceLocation("lapluma", "chat/icon/group_default.png")
-                        : new ResourceLocation("lapluma", "chat/icon/contact_default.png");
+                        ? new ResourceLocation("lapluma", "chat/skin/group_default.png")
+                        : new ResourceLocation("lapluma", "chat/skin/contact_default.png");
                 mc.getTextureManager().bindTexture(def);
+                Gui.drawModalRectWithCustomSizedTexture(x, y, 0, 0, AVATAR_SIZE, AVATAR_SIZE, AVATAR_SIZE, AVATAR_SIZE);
             }
             GlStateManager.color(1f, 1f, 1f, 1f);
-            Gui.drawModalRectWithCustomSizedTexture(x, y, 0, 0, AVATAR_SIZE, AVATAR_SIZE, AVATAR_SIZE, AVATAR_SIZE);
         } catch (Throwable ignored) {
             Gui.drawRect(x, y, x + AVATAR_SIZE, y + AVATAR_SIZE, 0xFF444444);
         }

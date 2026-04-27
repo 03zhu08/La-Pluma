@@ -12,7 +12,7 @@ import java.util.List;
 public class ChatContact {
     private String id;
     private String name;
-    private String avatar;
+    private String skin;
     private String faction;
     private String lastMessage;
     private long lastTimestamp;

@@ -44,6 +44,9 @@ public class ProxyPacketHandler {
     private static final Map<String, StringBuilder[]> chunkBuffers = new ConcurrentHashMap<>();
     private static volatile byte[] signingKey = null;
 
+    public static boolean chatRequestPending = false;
+    public static long chatRequestTime = 0;
+
     private static String hmacSha256(byte[] key, String data) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
@@ -83,6 +86,9 @@ public class ProxyPacketHandler {
         lastWorld = null;
         chunkBuffers.clear();
         signingKey = null;
+        chatRequestPending = false;
+        JournalNamespace.clearRemote();
+        ChatDataManager.reset();
     }
 
     @SubscribeEvent
@@ -93,12 +99,17 @@ public class ProxyPacketHandler {
         if(evt.getEntity() instanceof EntityPlayerSP && Minecraft.getMinecraft().player == evt.getEntity()) {
             lastWorld = evt.getWorld().getWorldInfo().getWorldName();
             Minecraft.getMinecraft().addScheduledTask(() -> {
-                ByteBuf pool = Unpooled.buffer();
-                pool.writeInt(-1);
-                pool.writeInt(0);
-                pool.writeBytes((LaPluma.MD5HASH).getBytes(Charsets.UTF_8));
-                FMLProxyPacket packet = new FMLProxyPacket(new PacketBuffer(pool), MSG_CHANNEL);
-                channel.sendToServer(packet);
+                if (Minecraft.getMinecraft().isSingleplayer()) {
+                    ChatDataManager.loadTestData();
+                } else {
+                    ChatDataManager.reset();
+                    ByteBuf pool = Unpooled.buffer();
+                    pool.writeInt(-1);
+                    pool.writeInt(0);
+                    pool.writeBytes((LaPluma.MD5HASH).getBytes(Charsets.UTF_8));
+                    FMLProxyPacket packet = new FMLProxyPacket(new PacketBuffer(pool), MSG_CHANNEL);
+                    channel.sendToServer(packet);
+                }
             });
         }
     }
@@ -154,6 +165,7 @@ public class ProxyPacketHandler {
                 signingKey = hexToBytes(c);
                 LaPluma.getLogger().log(Level.INFO, "[Security] Received signing key from server");
             } else if(a == 20) {
+                chatRequestPending = false;
                 Minecraft.getMinecraft().addScheduledTask(() ->
                         Minecraft.getMinecraft().displayGuiScreen(new GuiChatScreen(c.isEmpty() ? null : c)));
             } else if(a == 21) {

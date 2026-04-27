@@ -13,7 +13,7 @@ public class ChatMessage {
     private String id;
     private String senderId;
     private String senderName;
-    private String senderAvatar;
+    private String senderSkin;
     private String content;
     private long timestamp;
     private MessageType type;

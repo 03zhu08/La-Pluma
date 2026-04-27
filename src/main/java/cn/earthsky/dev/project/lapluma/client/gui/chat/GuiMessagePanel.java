@@ -17,14 +17,14 @@ import java.util.List;
 
 public class GuiMessagePanel {
 
-    private static final int HEADER_HEIGHT = 18;
+    private static final int HEADER_HEIGHT = 15;
     private static final int MSG_GAP = 6;
     private static final int REPLY_AREA_GAP = 8;
     private static final int BG_COLOR = 0x90101418;
     private static final int HEADER_BG = 0xC0181C24;
     private static final int TYPING_COLOR = 0xFF5588AA;
     private static final long FADE_DURATION = 400;
-    private static final long SWITCH_DURATION = 300;
+    private static final long SWITCH_DURATION = 600;
 
     @Getter @Setter private String contactId;
     private int scrollOffset = 0;
@@ -56,9 +56,21 @@ public class GuiMessagePanel {
         String title = "";
         if (contactId != null) {
             ChatContact contact = ChatDataManager.getContacts().get(contactId);
-            if (contact != null) title = contact.getName();
+            if (contact != null) {
+                title = contact.getName();
+                if (contact.isGroup() && contact.getMembers() != null && !contact.getMembers().isEmpty()) {
+                    StringBuilder sb = new StringBuilder(" (");
+                    for (int i = 0; i < contact.getMembers().size(); i++) {
+                        if (i > 0) sb.append(", ");
+                        ChatContact mc = ChatDataManager.getContacts().get(contact.getMembers().get(i));
+                        sb.append(mc != null ? mc.getName() : contact.getMembers().get(i));
+                    }
+                    sb.append(", 您)");
+                    title += sb.toString();
+                }
+            }
         }
-        fr.drawStringWithShadow("§l" + title, x + 8, y + 5, 0xFFDDDDDD);
+        fr.drawStringWithShadow("§l" + title, x + 8, y + 4, 0xFFDDDDDD);
         Gui.drawRect(x, y + HEADER_HEIGHT - 1, x + w, y + HEADER_HEIGHT, 0x40FF5733);
 
         if (contactId == null) {
@@ -289,32 +301,28 @@ public class GuiMessagePanel {
             int replyY = contentY - scrollOffset + totalH + REPLY_AREA_GAP;
             int clicked = ChatBubbleRenderer.getClickedOption(activeReplyOptions, x, replyY, w, mouseX, mouseY);
             if (clicked >= 0) {
-                String option = activeReplyOptions.get(clicked);
-                String json = ChatDataManager.buildReplyJson(contactId, replySourceMsg.getId(), option);
+                String branchId = null;
+                if (replySourceMsg.getReplyBranches() != null && clicked < replySourceMsg.getReplyBranches().size()) {
+                    branchId = replySourceMsg.getReplyBranches().get(clicked);
+                }
+                boolean returnsToMain = false;
+                if (replySourceMsg.getReplyReturnsToMain() != null && clicked < replySourceMsg.getReplyReturnsToMain().size()) {
+                    returnsToMain = replySourceMsg.getReplyReturnsToMain().get(clicked);
+                }
+
+                String json = ChatDataManager.buildReplyJson(contactId, branchId, clicked);
                 ProxyPacketHandler.sendPacket(25, clicked, json);
 
                 ChatMessage playerReply = new ChatMessage();
                 playerReply.setId("reply_" + System.currentTimeMillis());
                 playerReply.setSenderId("$player");
-                playerReply.setContent(option);
+                playerReply.setContent(activeReplyOptions.get(clicked));
                 playerReply.setTimestamp(System.currentTimeMillis());
                 playerReply.setType(ChatMessage.MessageType.TEXT);
                 playerReply.setRevealTime(System.currentTimeMillis());
                 ChatDataManager.addMessage(contactId, playerReply);
 
-                if (fromUnrevealedNext) {
-                    replySourceMsg.setReplyOptions(null);
-                } else {
-                    replySourceMsg.setReplyOptions(null);
-                }
-                String branchId = null;
-                boolean returnsToMain = false;
-                if (replySourceMsg.getReplyBranches() != null && clicked < replySourceMsg.getReplyBranches().size()) {
-                    branchId = replySourceMsg.getReplyBranches().get(clicked);
-                }
-                if (replySourceMsg.getReplyReturnsToMain() != null && clicked < replySourceMsg.getReplyReturnsToMain().size()) {
-                    returnsToMain = replySourceMsg.getReplyReturnsToMain().get(clicked);
-                }
+                replySourceMsg.setReplyOptions(null);
                 ChatDataManager.onReplySelected(contactId, branchId, returnsToMain);
                 autoScrollToBottom(w, h);
                 return true;

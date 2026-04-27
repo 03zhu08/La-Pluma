@@ -2,6 +2,9 @@
 #contact npc_001
 #title 古籍翻译
 #status completed
+#skin chat/skin/snow_maple
+#faction scholar
+#group false
 
 @npc_001|艾琳·霜叶
 你好，冒险者。我是学院的研究员艾琳。

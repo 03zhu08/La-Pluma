@@ -2,6 +2,9 @@
 #contact npc_002
 #title 矿石交易
 #status unread
+#skin chat/skin/contact_default
+#faction guard
+#group false
 
 @npc_002|卡尔·铁锤
 嘿，上次你说需要一批精铁矿石，我这边矿场新挖出来一批，品质相当不错。

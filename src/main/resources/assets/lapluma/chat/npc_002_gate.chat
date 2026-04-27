@@ -2,6 +2,9 @@
 #contact npc_002
 #title 城门事件
 #status unread
+#skin chat/skin/contact_default
+#faction guard
+#group false
 
 @npc_002|卡尔·铁锤
 你在吗？城门口出事了。

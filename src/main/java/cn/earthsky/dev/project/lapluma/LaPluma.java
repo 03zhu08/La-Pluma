@@ -280,8 +280,20 @@ public class LaPluma {
             ChatDataManager.tick();
             if (chatKey != null && chatKey.isPressed()) {
                 if (!(Minecraft.getMinecraft().currentScreen instanceof GuiChatScreen)) {
-                    Minecraft.getMinecraft().displayGuiScreen(new GuiChatScreen());
+                    if (Minecraft.getMinecraft().isSingleplayer()) {
+                        Minecraft.getMinecraft().displayGuiScreen(new GuiChatScreen());
+                    } else {
+                        ProxyPacketHandler.sendPacket(29, 0, "");
+                        ProxyPacketHandler.chatRequestPending = true;
+                        ProxyPacketHandler.chatRequestTime = System.currentTimeMillis();
+                    }
                 }
+            }
+
+            // Timeout pending chat request
+            if (ProxyPacketHandler.chatRequestPending
+                    && System.currentTimeMillis() - ProxyPacketHandler.chatRequestTime > 5000) {
+                ProxyPacketHandler.chatRequestPending = false;
             }
         }
 
