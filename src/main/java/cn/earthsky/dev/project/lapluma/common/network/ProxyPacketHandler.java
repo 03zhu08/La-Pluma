@@ -1,5 +1,6 @@
 package cn.earthsky.dev.project.lapluma.common.network;
 
+import cn.earthsky.dev.project.lapluma.client.camera.CameraRuntime;
 import cn.earthsky.dev.project.lapluma.client.gui.chat.GuiChatScreen;
 import cn.earthsky.dev.project.lapluma.client.gui.chat.data.ChatDataManager;
 import cn.earthsky.dev.project.lapluma.LaPluma;
@@ -9,6 +10,8 @@ import cn.earthsky.dev.project.lapluma.common.Functions;
 import cn.earthsky.dev.project.lapluma.common.JournalNamespace;
 import cn.earthsky.dev.project.lapluma.common.Parsing;
 import com.google.common.base.Charsets;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import cn.earthsky.dev.project.lapluma.common.text.ConversationLoader;
 import cn.earthsky.dev.project.lapluma.common.text.ConversationStructure;
 import io.netty.buffer.ByteBuf;
@@ -43,9 +46,6 @@ public class ProxyPacketHandler {
 
     private static final Map<String, StringBuilder[]> chunkBuffers = new ConcurrentHashMap<>();
     private static volatile byte[] signingKey = null;
-
-    public static boolean chatRequestPending = false;
-    public static long chatRequestTime = 0;
 
     private static String hmacSha256(byte[] key, String data) {
         try {
@@ -86,9 +86,9 @@ public class ProxyPacketHandler {
         lastWorld = null;
         chunkBuffers.clear();
         signingKey = null;
-        chatRequestPending = false;
         JournalNamespace.clearRemote();
         ChatDataManager.reset();
+        CameraRuntime.forceStop();
     }
 
     @SubscribeEvent
@@ -153,8 +153,15 @@ public class ProxyPacketHandler {
                 }
             } else if(a == 4) {
                 if(c.length() > 0) {
+                    String source = c;
+                    if (!source.startsWith("http://") && !source.startsWith("https://") && !source.startsWith("rtmp://")) {
+                        String resolved = Functions.resolveLocalVideo(source);
+                        if (resolved != null) source = resolved;
+                    }
+                    boolean allowSkip = b != 1;
+                    String finalSource = source;
                     Minecraft.getMinecraft().addScheduledTask(() ->
-                            GuiVideoPlayer.openVideo(c));
+                            GuiVideoPlayer.openVideo(finalSource, allowSkip, null));
                 }
             } else if(a == 9) {
                 System.out.println("Received Handled Message: " + c);
@@ -165,7 +172,6 @@ public class ProxyPacketHandler {
                 signingKey = hexToBytes(c);
                 LaPluma.getLogger().log(Level.INFO, "[Security] Received signing key from server");
             } else if(a == 20) {
-                chatRequestPending = false;
                 Minecraft.getMinecraft().addScheduledTask(() ->
                         Minecraft.getMinecraft().displayGuiScreen(new GuiChatScreen(c.isEmpty() ? null : c)));
             } else if(a == 21) {
@@ -178,7 +184,22 @@ public class ProxyPacketHandler {
                 Minecraft.getMinecraft().addScheduledTask(() -> ChatDataManager.setTyping(c, b == 1));
             } else if(a == 27) {
                 Minecraft.getMinecraft().addScheduledTask(() -> ChatDataManager.parseUpdateContactJson(c));
+            } else if(a == 40) {
+                Minecraft.getMinecraft().addScheduledTask(() -> handleCameraPlay(c));
+            } else if(a == 41) {
+                Minecraft.getMinecraft().addScheduledTask(() -> CameraRuntime.forceStop("SERVER_STOP"));
             }
+        }
+    }
+
+    private void handleCameraPlay(String ctx) {
+        try {
+            JsonObject obj = new JsonParser().parse(ctx).getAsJsonObject();
+            String cameraId = obj.has("cameraId") ? obj.get("cameraId").getAsString() : obj.get("id").getAsString();
+            boolean allowSkip = !obj.has("allowSkip") || obj.get("allowSkip").getAsBoolean();
+            CameraRuntime.play(cameraId, allowSkip, null);
+        } catch (Throwable throwable) {
+            LaPluma.getLogger().log(Level.WARNING, "[Camera] Cannot parse camera play packet: " + ctx, throwable);
         }
     }
 
@@ -311,6 +332,10 @@ public class ProxyPacketHandler {
             26 - 输入中指示器 (服务端→客户端, data: 0=停止/1=开始, ctx=contactId)
             27 - 更新单个联系人 (服务端→客户端, ctx=JSON)
             28 - 对话已读完毕 (客户端→服务端, ctx=contactId)
+            40 - 播放运镜 (服务端→客户端, ctx=JSON: cameraId/id, allowSkip)
+            41 - 停止运镜 (服务端→客户端)
+            42 - 运镜结束回传 (客户端→服务端, ctx=JSON: cameraId,result)
+            44 - 运镜事件回传 (客户端→服务端, ctx=JSON: cameraId,event,type)
             23 - KeepAlive
     1 int - 附加内容
                0 = 0 空

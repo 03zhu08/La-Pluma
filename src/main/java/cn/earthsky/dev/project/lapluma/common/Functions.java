@@ -1,6 +1,7 @@
 package cn.earthsky.dev.project.lapluma.common;
 
 import cn.earthsky.dev.project.lapluma.LaPluma;
+import cn.earthsky.dev.project.lapluma.client.camera.CameraRuntime;
 import cn.earthsky.dev.project.lapluma.client.event.PlayJournalCommandEvent;
 import cn.earthsky.dev.project.lapluma.client.gui.GuiDialog;
 import cn.earthsky.dev.project.lapluma.client.gui.GuiVideoPlayer;
@@ -204,6 +205,26 @@ public class Functions {
             screen.suspendForVideo();
             Minecraft.getMinecraft().addScheduledTask(() ->
                     GuiVideoPlayer.openVideo(finalSource, finalAllowSkip, screen));
+        }else if(parsing.getFunctionName().equalsIgnoreCase("camera")){
+            String cameraId = Selector.searchNonNull(parsing.getArguments(),"id","camera","cam","name","n","value","val","v");
+            if(cameraId == null || cameraId.trim().isEmpty()) return;
+            String blockingArg = Selector.searchNonNull(parsing.getArguments(),"blocking","block","wait","sync");
+            boolean blocking = blockingArg == null || Parsers.parseBoolean(blockingArg);
+            String skipArg = Selector.searchNonNull(parsing.getArguments(),"skip","skippable","canSkip","allowSkip","allow","esc");
+            boolean allowSkip = skipArg == null || Parsers.parseBoolean(skipArg);
+            if(blocking){
+                screen.suspendForCamera();
+                Minecraft.getMinecraft().addScheduledTask(() ->
+                        CameraRuntime.play(cameraId, allowSkip, screen::resumeAfterCamera));
+            }else{
+                Minecraft.getMinecraft().addScheduledTask(() ->
+                        CameraRuntime.play(cameraId, allowSkip, null, false));
+            }
+        }else if(parsing.getFunctionName().equalsIgnoreCase("waitCamera")){
+            if(CameraRuntime.isPlaying()){
+                screen.suspendForCamera();
+                CameraRuntime.addCompletionCallback(screen::resumeAfterCamera);
+            }
         }
     }
 }

@@ -1,0 +1,54 @@
+{
+  "id": "intro_gate",
+  "world": {
+    "dimension": 0
+  },
+  "durationTicks": 120,
+  "allowSkip": true,
+  "hideHud": true,
+  "hideHand": true,
+  "lockInput": true,
+  "cinematicBars": true,
+  "keyframes": [
+    {
+      "time": 0,
+      "position": [0, 72, 0],
+      "rotation": [18, 35, 0],
+      "lens": {
+        "focalLength": 35,
+        "aperture": 2.8,
+        "iso": 100,
+        "shutterSpeed": 0.0167
+      }
+    },
+    {
+      "time": 3,
+      "position": [8, 74, 8],
+      "rotation": [12, 45, 0],
+      "lens": {
+        "focalLength": 50,
+        "aperture": 2.0,
+        "iso": 100,
+        "shutterSpeed": 0.0167
+      }
+    },
+    {
+      "time": 6,
+      "position": [14, 76, 14],
+      "rotation": [8, 52, 0],
+      "lens": {
+        "focalLength": 70,
+        "aperture": 2.0,
+        "iso": 100,
+        "shutterSpeed": 0.0167
+      }
+    }
+  ],
+  "events": [
+    {
+      "time": 4,
+      "event": "intro_gate_midpoint",
+      "type": "marker"
+    }
+  ]
+}

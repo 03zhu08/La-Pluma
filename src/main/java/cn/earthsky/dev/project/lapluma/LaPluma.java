@@ -1,6 +1,6 @@
 package cn.earthsky.dev.project.lapluma;
 
-import cn.earthsky.dev.project.lapluma.client.gui.chat.GuiChatScreen;
+import cn.earthsky.dev.project.lapluma.client.camera.CameraRuntime;
 import cn.earthsky.dev.project.lapluma.client.gui.chat.data.ChatDataManager;
 import cn.earthsky.dev.project.lapluma.common.JournalNamespace;
 import cn.earthsky.dev.project.lapluma.common.commands.PlayJournalCommand;
@@ -14,14 +14,15 @@ import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.resources.*;
 import net.minecraft.item.Item;
-import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.SoundEvent;
 import net.minecraftforge.client.ClientCommandHandler;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
+import net.minecraftforge.client.event.EntityViewRenderEvent;
+import net.minecraftforge.client.event.InputUpdateEvent;
+import net.minecraftforge.client.event.RenderSpecificHandEvent;
 import net.minecraftforge.client.event.sound.SoundSetupEvent;
 import net.minecraftforge.event.RegistryEvent;
-import net.minecraftforge.fml.client.registry.ClientRegistry;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.event.FMLInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPostInitializationEvent;
@@ -64,7 +65,6 @@ public class LaPluma {
 
     public static String MD5HASH;
 
-    public static KeyBinding chatKey;
 
     /**
      * This is the instance of your mod as created by Forge. It will never be null.
@@ -90,8 +90,6 @@ public class LaPluma {
         ClientCommandHandler.instance.registerCommand(new PlayJournalCommand());
         ClientCommandHandler.instance.registerCommand(new PlayVideoCommand());
 
-        chatKey = new KeyBinding("key.lapluma.chat", org.lwjgl.input.Keyboard.KEY_U, "key.categories.lapluma");
-        ClientRegistry.registerKeyBinding(chatKey);
     }
 
     /**
@@ -128,7 +126,7 @@ public class LaPluma {
                     while (entries.hasMoreElements()) {
                         JarEntry entry = entries.nextElement();
                         String name = entry.getName();
-                        if(name.endsWith(".journal") || (name.contains("avg") && name.endsWith(".png"))) {
+                        if(name.endsWith(".journal") || name.endsWith(".cam.json") || (name.contains("avg") && name.endsWith(".png"))) {
                             try (InputStream str = jar.getInputStream(entry)) {
                                 int b = str.read();
                                 while (b != -1) {
@@ -161,7 +159,7 @@ public class LaPluma {
                     while (entries.hasMoreElements()) {
                         ZipEntry entry = entries.nextElement();
                         String name = entry.getName();
-                        if(name.endsWith(".journal") || (name.contains("avg") && name.endsWith(".png"))) {
+                        if(name.endsWith(".journal") || name.endsWith(".cam.json") || (name.contains("avg") && name.endsWith(".png"))) {
                             try (InputStream str = jar.getInputStream(entry)) {
                                 int b = str.read();
                                 while (b != -1) {
@@ -192,7 +190,7 @@ public class LaPluma {
                     ZipEntry entry = entries.nextElement();
 
                     String name = entry.getName();
-                    if(name.endsWith(".journal") || (name.contains("avg") && name.endsWith(".png"))) {
+                    if(name.endsWith(".journal") || name.endsWith(".cam.json") || (name.contains("avg") && name.endsWith(".png"))) {
                         try (InputStream str = jar.getInputStream(entry)) {
                             int b = str.read();
                             while (b != -1) {
@@ -269,6 +267,7 @@ public class LaPluma {
 
         @SubscribeEvent
         public static void onRenderOverlay(RenderGameOverlayEvent.Pre event) {
+            CameraRuntime.onRenderOverlay(event);
             if (Minecraft.getMinecraft().currentScreen instanceof GuiDialog) {
                 event.setCanceled(true);
             }
@@ -278,23 +277,27 @@ public class LaPluma {
         public static void onClientTick(TickEvent.ClientTickEvent event) {
             if (event.phase != TickEvent.Phase.END) return;
             ChatDataManager.tick();
-            if (chatKey != null && chatKey.isPressed()) {
-                if (!(Minecraft.getMinecraft().currentScreen instanceof GuiChatScreen)) {
-                    if (Minecraft.getMinecraft().isSingleplayer()) {
-                        Minecraft.getMinecraft().displayGuiScreen(new GuiChatScreen());
-                    } else {
-                        ProxyPacketHandler.sendPacket(29, 0, "");
-                        ProxyPacketHandler.chatRequestPending = true;
-                        ProxyPacketHandler.chatRequestTime = System.currentTimeMillis();
-                    }
-                }
-            }
+            CameraRuntime.tick();
+        }
 
-            // Timeout pending chat request
-            if (ProxyPacketHandler.chatRequestPending
-                    && System.currentTimeMillis() - ProxyPacketHandler.chatRequestTime > 5000) {
-                ProxyPacketHandler.chatRequestPending = false;
-            }
+        @SubscribeEvent
+        public static void onCameraSetup(EntityViewRenderEvent.CameraSetup event) {
+            CameraRuntime.onCameraSetup(event);
+        }
+
+        @SubscribeEvent
+        public static void onFovModifier(EntityViewRenderEvent.FOVModifier event) {
+            CameraRuntime.onFov(event);
+        }
+
+        @SubscribeEvent
+        public static void onInputUpdate(InputUpdateEvent event) {
+            CameraRuntime.onInputUpdate(event);
+        }
+
+        @SubscribeEvent
+        public static void onRenderHand(RenderSpecificHandEvent event) {
+            CameraRuntime.onRenderHand(event);
         }
 
         @SubscribeEvent

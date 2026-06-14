@@ -84,6 +84,22 @@ public class GuiDialog extends GuiScreen {
         this.hideHUD = true;
     }
 
+    private boolean promptBlocked = false;
+    private boolean suspendedForCamera = false;
+
+    public void suspendForCamera(){
+        this.hideHUD = true;
+        this.promptBlocked = true;
+        this.suspendedForCamera = true;
+    }
+
+    public void resumeAfterCamera(){
+        this.hideHUD = false;
+        this.promptBlocked = false;
+        this.suspendedForCamera = false;
+        nextPrompt();
+    }
+
 
 
     @Data
@@ -119,7 +135,7 @@ public class GuiDialog extends GuiScreen {
         this.fullText = "";
         this.hasContinueStructure = true;
         this.dialogAnimState = DialogAnimState.IDLE;
-        this.dialogAnimTick = 0;
+        this.dialogSlide = 0.0f;
         this.isFirstLine = true;
         fxBlockingQueue.forEach(Runnable::run);
         nextPrompt();
@@ -140,7 +156,7 @@ public class GuiDialog extends GuiScreen {
             this.fullText = "";
             this.hasContinueStructure = true;
             this.dialogAnimState = DialogAnimState.IDLE;
-            this.dialogAnimTick = 0;
+            this.dialogSlide = 0.0f;
             this.isFirstLine = true;
             fxBlockingQueue.forEach(Runnable::run);
             nextPrompt();
@@ -158,9 +174,7 @@ public class GuiDialog extends GuiScreen {
 
     private enum DialogAnimState { IDLE, SLIDING_OUT, SLIDING_IN }
     private DialogAnimState dialogAnimState = DialogAnimState.IDLE;
-    private int dialogAnimTick = 0;
-    private static final int ANIM_SLIDE_OUT_TICKS = 4;
-    private static final int ANIM_SLIDE_IN_TICKS = 6;
+    private float dialogSlide = 0.0f;
     private String pendingSpeaker = null;
     private String pendingFullText = null;
     private boolean isFirstLine = true;
@@ -386,8 +400,8 @@ public class GuiDialog extends GuiScreen {
             if (w > maxTextWidth) maxTextWidth = w;
         }
         int btnWidth = maxTextWidth + 34;
-        int btnHeight = 20;
-        int gap = 4;
+        int btnHeight = 22;
+        int gap = 5;
         int margin = 15;
         int total = selectionButtonList.size();
         int btnX = this.width - btnWidth - margin;
@@ -416,13 +430,12 @@ public class GuiDialog extends GuiScreen {
         if (isFirstLine || dialogAnimState != DialogAnimState.IDLE) {
             applyNewText(speaker, newText);
             dialogAnimState = DialogAnimState.SLIDING_IN;
-            dialogAnimTick = 0;
+            dialogSlide = 1.0f;
             isFirstLine = false;
         } else {
             pendingSpeaker = speaker;
             pendingFullText = newText;
             dialogAnimState = DialogAnimState.SLIDING_OUT;
-            dialogAnimTick = 0;
         }
     }
 
@@ -467,23 +480,9 @@ public class GuiDialog extends GuiScreen {
             return;
         }
 
-        if (dialogAnimState == DialogAnimState.SLIDING_OUT) {
-            dialogAnimTick++;
-            if (dialogAnimTick >= ANIM_SLIDE_OUT_TICKS) {
-                applyNewText(pendingSpeaker, pendingFullText);
-                pendingSpeaker = null;
-                pendingFullText = null;
-                dialogAnimState = DialogAnimState.SLIDING_IN;
-                dialogAnimTick = 0;
-            }
+        if (dialogAnimState != DialogAnimState.IDLE) {
+            autoPlayWaitTick = 0;
             return;
-        }
-        if (dialogAnimState == DialogAnimState.SLIDING_IN) {
-            dialogAnimTick++;
-            if (dialogAnimTick >= ANIM_SLIDE_IN_TICKS) {
-                dialogAnimState = DialogAnimState.IDLE;
-                dialogAnimTick = 0;
-            }
         }
 
         if (text.equals(fullText)) {
@@ -502,15 +501,7 @@ public class GuiDialog extends GuiScreen {
         if (textProgress >= totalWidth) {
             text = fullText;
         } else {
-            int px = 0;
-            int count = 0;
-            for (int i = 0; i < fullText.length(); i++) {
-                int cw = fontRenderer.getCharWidth(fullText.charAt(i));
-                if (px + cw > textProgress) break;
-                px += cw;
-                count++;
-            }
-            text = fullText.substring(0, count);
+            text = fullText.substring(0, getRevealState(fullText, textProgress).solidEnd);
         }
 
     }
@@ -523,6 +514,48 @@ public class GuiDialog extends GuiScreen {
         GL11.glScaled(scale, scale, 1.0F);
         this.drawCenteredString(fontRenderer, text, (int) (x / scale ), (int) (y / scale - fontRenderer.FONT_HEIGHT ), color);
         GL11.glPopMatrix();
+    }
+
+    private RevealState getRevealState(String value, float revealedPx) {
+        RevealState state = new RevealState();
+        if (value == null || value.isEmpty() || revealedPx <= 0) return state;
+
+        int len = value.length();
+        for (int i = 0; i < len; i++) {
+            if (value.charAt(i) == '\u00A7' && i + 1 < len) {
+                state.solidEnd = i + 2;
+                i++;
+                continue;
+            }
+
+            int currentW = fontRenderer.getStringWidth(value.substring(0, i));
+            int nextW = fontRenderer.getStringWidth(value.substring(0, i + 1));
+            int charW = Math.max(1, nextW - currentW);
+            if (nextW <= revealedPx) {
+                state.solidEnd = i + 1;
+                state.solidWidth = nextW;
+            } else {
+                state.nextIndex = i;
+                state.solidWidth = currentW;
+                state.nextWidth = charW;
+                state.nextAlpha = Math.max(0f, Math.min(1f, (revealedPx - currentW) / (float) charW));
+                return state;
+            }
+        }
+
+        state.solidEnd = len;
+        state.solidWidth = fontRenderer.getStringWidth(value);
+        state.nextIndex = len;
+        state.nextAlpha = 0f;
+        return state;
+    }
+
+    private static class RevealState {
+        int solidEnd = 0;
+        int solidWidth = 0;
+        int nextIndex = -1;
+        int nextWidth = 1;
+        float nextAlpha = 0f;
     }
 
     private void drawCenteredSplitString(int trimWidth, int top, double textScale, int color, float partialTicks) {
@@ -548,21 +581,13 @@ public class GuiDialog extends GuiScreen {
             if (lineRevealed >= lineW) {
                 fontRenderer.drawStringWithShadow(fullLine, lineX, y, color);
             } else if (lineRevealed > 0) {
-                int px = 0;
-                int solidEnd = 0;
-                for (int i = 0; i < fullLine.length(); i++) {
-                    int cw = fontRenderer.getCharWidth(fullLine.charAt(i));
-                    if (px + cw <= lineRevealed) { px += cw; solidEnd = i + 1; }
-                    else break;
+                RevealState reveal = getRevealState(fullLine, lineRevealed);
+                if (reveal.solidEnd > 0) {
+                    fontRenderer.drawStringWithShadow(fullLine.substring(0, reveal.solidEnd), lineX, y, color);
                 }
-                if (solidEnd > 0) {
-                    fontRenderer.drawStringWithShadow(fullLine.substring(0, solidEnd), lineX, y, color);
-                }
-                if (solidEnd < fullLine.length()) {
-                    int charX = lineX + (solidEnd > 0 ? fontRenderer.getStringWidth(fullLine.substring(0, solidEnd)) : 0);
-                    float alpha = (lineRevealed - px) / (float) fontRenderer.getCharWidth(fullLine.charAt(solidEnd));
-                    alpha = Math.max(0f, Math.min(1f, alpha));
-                    drawFadingChar(String.valueOf(fullLine.charAt(solidEnd)), charX, y, color, alpha, textScale);
+                if (reveal.nextIndex >= 0 && reveal.nextIndex < fullLine.length()) {
+                    int charX = lineX + reveal.solidWidth;
+                    drawFadingChar(String.valueOf(fullLine.charAt(reveal.nextIndex)), charX, y, color, reveal.nextAlpha, textScale);
                 }
             } else {
                 break;
@@ -766,7 +791,7 @@ public class GuiDialog extends GuiScreen {
             }
             ConversationPrompt prompt = structure.at(cursor);
             prompt.sendPrompt(this);
-            if (prompt instanceof FunctionPrompt) {
+            if (prompt instanceof FunctionPrompt && !promptBlocked) {
                 nextPrompt();
             }
         }else{
@@ -780,7 +805,7 @@ public class GuiDialog extends GuiScreen {
                     }
                     ConversationPrompt prompt = structure.at(cursor);
                     prompt.sendPrompt(this);
-                    if (prompt instanceof FunctionPrompt) {
+                    if (prompt instanceof FunctionPrompt && !promptBlocked) {
                         nextPrompt();
                     }
                 }
@@ -794,12 +819,29 @@ public class GuiDialog extends GuiScreen {
     public void onGuiClosed() {
         super.onGuiClosed();
         if (charFbo != null) { charFbo.deleteFramebuffer(); charFbo = null; }
+        if (suspendedForCamera) return;
         ProxyPacketHandler.sendPacket(2,trySkipped ? 1 : 0, structure.getName());
     }
 
 
     public void drawGradientRect(int left,int top,int right, int down, int c1,int c2){
         super.drawGradientRect(left, top, right, down, c1, c2);
+    }
+
+    private void updateDialogSlide() {
+        float target = dialogAnimState == DialogAnimState.SLIDING_OUT ? 1f : 0f;
+        float diff = target - dialogSlide;
+        if (Math.abs(diff) > 0.01f) dialogSlide += diff * 0.15f;
+        else dialogSlide = target;
+
+        if (dialogAnimState == DialogAnimState.SLIDING_OUT && dialogSlide >= 1.0f) {
+            applyNewText(pendingSpeaker, pendingFullText);
+            pendingSpeaker = null;
+            pendingFullText = null;
+            dialogAnimState = DialogAnimState.SLIDING_IN;
+        } else if (dialogAnimState == DialogAnimState.SLIDING_IN && dialogSlide <= 0.0f) {
+            dialogAnimState = DialogAnimState.IDLE;
+        }
     }
 
 
@@ -886,21 +928,10 @@ public class GuiDialog extends GuiScreen {
             }
 
             if(showDialog) {
-                float animAlpha = 1.0f;
-                int animYOffset = 0;
-                int slideDistance = 50;
-
-                if (dialogAnimState == DialogAnimState.SLIDING_OUT) {
-                    float progress = Math.min((dialogAnimTick + partialTicks) / ANIM_SLIDE_OUT_TICKS, 1.0f);
-                    float eased = progress * progress;
-                    animAlpha = 1.0f - eased;
-                    animYOffset = (int)(eased * slideDistance);
-                } else if (dialogAnimState == DialogAnimState.SLIDING_IN) {
-                    float progress = Math.min((dialogAnimTick + partialTicks) / ANIM_SLIDE_IN_TICKS, 1.0f);
-                    float eased = 1.0f - (1.0f - progress) * (1.0f - progress) * (1.0f - progress);
-                    animAlpha = eased;
-                    animYOffset = (int)((1.0f - eased) * slideDistance);
-                }
+                updateDialogSlide();
+                float animAlpha = 1.0f - dialogSlide;
+                int slideDistance = Math.max(36, (int) (54 * getHeightScale()));
+                int animYOffset = (int)(dialogSlide * slideDistance);
 
                 int alphaInt = (int)(animAlpha * 255) & 0xFF;
 
@@ -950,21 +981,13 @@ public class GuiDialog extends GuiScreen {
                         int sy = (int)((this.height / 2f + animYOffset) / cScale - fontRenderer.FONT_HEIGHT);
                         int startX = sx - totalW / 2;
 
-                        int px = 0;
-                        int solidEnd = 0;
-                        for (int i = 0; i < fullText.length(); i++) {
-                            int cw = fontRenderer.getCharWidth(fullText.charAt(i));
-                            if (px + cw <= renderPx) { px += cw; solidEnd = i + 1; }
-                            else break;
+                        RevealState reveal = getRevealState(fullText, renderPx);
+                        if (reveal.solidEnd > 0) {
+                            fontRenderer.drawStringWithShadow(fullText.substring(0, reveal.solidEnd), startX, sy, centerColor);
                         }
-                        if (solidEnd > 0) {
-                            fontRenderer.drawStringWithShadow(fullText.substring(0, solidEnd), startX, sy, centerColor);
-                        }
-                        if (solidEnd < fullText.length()) {
-                            int charX = startX + (solidEnd > 0 ? fontRenderer.getStringWidth(fullText.substring(0, solidEnd)) : 0);
-                            float alpha = (renderPx - px) / (float) fontRenderer.getCharWidth(fullText.charAt(solidEnd));
-                            alpha = Math.max(0f, Math.min(1f, alpha));
-                            drawFadingChar(String.valueOf(fullText.charAt(solidEnd)), charX, sy, centerColor, alpha, cScale);
+                        if (reveal.nextIndex >= 0 && reveal.nextIndex < fullText.length()) {
+                            int charX = startX + reveal.solidWidth;
+                            drawFadingChar(String.valueOf(fullText.charAt(reveal.nextIndex)), charX, sy, centerColor, reveal.nextAlpha, cScale);
                         }
                         GL11.glPopMatrix();
                     } else {
